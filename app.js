@@ -1,6 +1,18 @@
 'use strict';
 
-const SETTINGS = ['fio', 'branch', 'assignment', 'office', 'rate', 'orderType', 'segment', 'projectCode', 'org', 'inn'];
+const const SETTINGS = [
+  'fio',
+  'branch',
+  'assignment',
+  'office',
+  'rate',
+  'orderType',
+  'segment',
+  'projectCode',
+  'org',
+  'inn',
+  'kmMarkup'
+];
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const WEEKDAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 
@@ -50,16 +62,30 @@ function recallKm(a, b) {
 
 function initSettings() {
   const saved = load('ml.settings', {});
+
   for (const k of SETTINGS) {
-    if (saved[k] != null && saved[k] !== '') $(k).value = saved[k];
+    if (saved[k] != null && saved[k] !== '') {
+      $(k).value = saved[k];
+    }
+
     $(k).addEventListener('change', () => {
       saveSettings();
-      if (k === 'fio') { rebuildMonths(); rebuildDays(); }
-      else if (k === 'office') onOfficeChange();
-      else renderTotals();
+
+      if (k === 'fio') {
+        rebuildMonths();
+        rebuildDays();
+      } else if (k === 'office') {
+        onOfficeChange();
+      } else if (k === 'kmMarkup') {
+        recalcKmMarkup();
+      } else {
+        renderTotals();
+      }
+
       markRequired();
     });
   }
+
   markRequired();
 }
 function saveSettings() {
@@ -69,8 +95,27 @@ function saveSettings() {
 }
 function settings() {
   const s = {};
-  for (const k of SETTINGS) s[k] = $(k).value.trim();
-  s.rate = parseFloat(String(s.rate).replace(',', '.').replace(/\s/g, '')) || 0;
+
+  for (const k of SETTINGS) {
+    s[k] = $(k).value.trim();
+  }
+
+  s.rate =
+    parseFloat(
+      String(s.rate)
+        .replace(',', '.')
+        .replace(/\s/g, '')
+    ) || 0;
+
+  s.kmMarkup =
+    parseFloat(
+      String(s.kmMarkup)
+        .replace(',', '.')
+        .replace(/\s/g, '')
+    ) || 0;
+
+  s.kmMarkup = Math.max(0, s.kmMarkup);
+
   return s;
 }
 function markRequired() {
@@ -645,7 +690,13 @@ async function osrm(points) {
   return data.routes[0].legs.map((l) => l.distance / 1000);
 }
 
-function kmValue(d) { return Math.round(d * 10) / 10; }
+function kmValue(d) {
+  const percent = settings().kmMarkup;
+
+  return Math.round(
+    d * (1 + percent / 100) * 10
+  ) / 10;
+}
 
 async function computeKm() {
   const run = ++kmRun;
