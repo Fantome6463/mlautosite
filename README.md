@@ -15,3 +15,26 @@
 ## Запуск
 
 Откройте `index.html` через любой статический сервер, например `python3 -m http.server`, или включите GitHub Pages (Settings → Pages → Deploy from branch).
+
+## Свой сервер: Windows + nginx
+
+Сайт статический — нужны только файлы из репозитория, без базы данных и PHP. Он встаёт рядом с уже работающими сайтами: nginx различает сайты по домену (`server_name`), поэтому IP и порты 80/443 у всех общие.
+
+Готовые файлы лежат в папке `deploy/`. Везде ниже `marshrutnik.ru` — пример: замените на свой домен, а `C:\nginx` и `C:\sites\marshrutnik` — на свои пути.
+
+1. **DNS.** У регистратора домена добавьте записи `A @` и `A www` с IP вашего сервера — тем же, на который смотрит ваш текущий домен. Подождите 15 минут – пару часов.
+2. **Файлы сайта.** Установите [Git для Windows](https://git-scm.com/download/win) и выполните:
+   ```
+   git clone -b claude/vigilant-hopper-4qqja3 https://github.com/fantome6463/mlautosite.git C:\sites\marshrutnik
+   ```
+3. **nginx.** Скопируйте `deploy\marshrutnik.conf` в `C:\nginx\conf\sites\`, в `C:\nginx\conf\nginx.conf` внутри блока `http { ... }` добавьте строку `include sites/marshrutnik.conf;` и перезагрузите nginx (`deploy\reload-nginx.bat`). Сайт откроется по `http://marshrutnik.ru`.
+4. **HTTPS.** Скачайте [win-acme](https://www.win-acme.com/) и выпустите бесплатный сертификат Let's Encrypt (команда в одну строку):
+   ```
+   wacs.exe --source manual --host marshrutnik.ru,www.marshrutnik.ru --validation filesystem --webroot C:\sites\marshrutnik --store pemfiles --pemfilespath C:\nginx\ssl --installation script --script C:\sites\marshrutnik\deploy\reload-nginx.bat
+   ```
+   win-acme сам создаст задачу в Планировщике и будет продлевать сертификат каждые ~60 дней, перезагружая nginx.
+5. **Включить HTTPS.** В `marshrutnik.conf` выполните «ШАГ 2» (он подписан в файле): включите перенаправление на https и раскомментируйте блок `listen 443`. Снова `reload-nginx.bat`.
+
+Если для двух текущих сайтов сертификаты уже выпускаются другим способом (например, через Certbot), выпустите сертификат для нового домена тем же способом — и укажите пути к нему в `ssl_certificate` / `ssl_certificate_key`.
+
+**Обновление сайта:** запустите `deploy\update.ps1` (или `git pull` в папке сайта). Перезагружать nginx не нужно.
