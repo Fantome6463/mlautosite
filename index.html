@@ -6,10 +6,10 @@
 <title>Маршрутник — маршрутный лист из выгрузки</title>
 <meta name="description" content="Загрузите выгрузку заданий — получите готовый отчёт о служебных поездках с посчитанным километражем.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237b3fe4'/%3E%3Cpath d='M9 23c0-6 14-4 14-10a4 4 0 0 0-8 0' fill='none' stroke='%23fff' stroke-width='2.6' stroke-linecap='round'/%3E%3Ccircle cx='9' cy='23' r='2.6' fill='%23fff'/%3E%3Ccircle cx='23' cy='13' r='2.6' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="style.css">
-<style>
-.brand{display:flex;align-items:center;gap:10px}.settings-btn{width:38px;height:38px;margin-left:4px;padding:0;border:0;border-radius:10px;background:rgba(255,255,255,.14);color:inherit;font-size:21px;line-height:1;cursor:pointer;transition:background .15s,transform .15s}.settings-btn:hover{background:rgba(255,255,255,.22);transform:rotate(20deg)}.settings-panel[hidden]{display:none}.settings-panel{position:fixed;inset:0;z-index:1000}.settings-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.42)}.settings-dialog{position:relative;width:min(430px,calc(100% - 32px));margin:90px auto 0;background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden}.settings-head{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid #eee}.settings-head h2{margin:0}.settings-close{width:34px;height:34px;padding:0;border:0;border-radius:8px;background:transparent;font-size:28px;line-height:1;cursor:pointer}.settings-close:hover{background:#f1f1f1}.settings-body{padding:20px}.settings-body label{display:block;font-weight:600}.settings-body input{width:100%;box-sizing:border-box;margin-top:8px}.settings-body .hint{margin:12px 0 0}body.settings-open{overflow:hidden}
-</style>
 </head>
 <body>
 <header class="hero">
@@ -21,7 +21,7 @@
         <circle cx="9" cy="23" r="2.6" fill="#fff"/><circle cx="23" cy="13" r="2.6" fill="#fff"/>
       </svg>
       <span class="name">Маршрутник</span>
-      <button id="settingsBtn" class="settings-btn" type="button" title="Настройки" aria-label="Настройки">⚙️</button>
+      <button id="settingsBtn" class="settings-btn" type="button" title="Настройки" aria-label="Настройки"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Настройки</span></button>
     </div>
     <h1>Маршрутный лист из выгрузки — за пару минут</h1>
     <p class="lead">Загрузите выгрузку заданий, и Маршрутник сам разложит адреса по дням, посчитает километры по дорогам и соберёт готовый «Отчёт о служебных поездках» в Excel.</p>
@@ -97,7 +97,7 @@
     <h2><span class="badge">3</span>Маршрут по дням</h2>
     <p class="intro">Каждый день начинается с выезда с базы (0 км) и заканчивается возвратом на базу. Точки идут в порядке выполнения заданий. Км в строке — расстояние по дорогам от предыдущей точки до этой.</p>
     <div class="toolbar">
-      <button id="recalc" type="button">↻ Пересчитать км</button>
+      <button id="recalc" type="button" class="ghost">↻ Пересчитать км</button>
       <span id="kmStatus" class="hint"></span>
     </div>
     <ul class="legend">
@@ -113,7 +113,7 @@
   <section class="card" id="exportCard" hidden>
     <h2><span class="badge">4</span>Готово</h2>
     <p class="intro">В файле будут все четыре раздела отчёта: детализация маршрута, топливная карта, реестр выплат и реестр чеков. Суммы считаются формулами, поэтому их можно поправить прямо в Excel.</p>
-    <button id="download" type="button" class="primary">Скачать отчёт .xlsx</button>
+    <button id="download" type="button" class="primary big"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12m0 0-4-4m4 4 4-4M5 20h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Скачать отчёт .xlsx</button>
     <span id="warn" class="warn"></span>
   </section>
 

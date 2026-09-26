@@ -474,7 +474,7 @@ function render() {
   $('exportCard').hidden = !has;
   $('days').innerHTML = state.days.map((day, di) => `
     <div class="day">
-      <h3>${fmtDay(day.key)} <span class="dsum" data-dsum="${di}"></span></h3>
+      <h3><span class="dname">${fmtDay(day.key)}</span> <span class="dsum" data-dsum="${di}"></span></h3>
       <div class="table-wrap"><table>
         <thead><tr><th>#</th><th>Адрес</th><th>Время</th><th>Номер наряда</th><th>Км</th><th></th></tr></thead>
         <tbody>${day.rows.map((r, ri) => rowHtml(r, di, ri, day.rows.length)).join('')}</tbody>
@@ -492,11 +492,11 @@ function rowHtml(r, di, ri, n) {
   const label = r.kind === 'base' ? 'Выезд с базы' : r.kind === 'return' ? 'Возврат на базу' : '';
   const isTask = r.kind === 'task';
   const addr = r.addr || '<i>введите адрес базы</i>';
-  return `<tr class="${isTask ? '' : 'base'}">
-    <td>${ri + 1}</td>
-    <td class="addr">${r.addr ? esc(r.addr) : addr}${label ? ` <small>· ${label}</small>` : ''}</td>
+  return `<tr class="${isTask ? 'task' : 'base'}">
+    <td class="n">${ri + 1}</td>
+    <td class="addr">${r.addr ? esc(r.addr) : addr}${label ? ` <small>${label}</small>` : ''}</td>
     <td class="time">${esc(r.time)}</td>
-    <td>${esc(r.num)}</td>
+    <td class="ord">${esc(r.num)}</td>
     <td class="num"><input type="number" min="0" step="0.1" value="${esc(r.km)}" data-km="${di}:${ri}" ${ri === 0 ? 'disabled' : ''}><span data-src="${di}:${ri}">${srcTag(r)}</span></td>
     <td class="act">${isTask ? `
       <button class="icon" title="Выше" data-move="${di}:${ri}:-1" ${ri <= 1 ? 'disabled' : ''}>↑</button>
@@ -526,8 +526,10 @@ function renderTotals() {
     if (el) el.textContent = `${round1(dkm)} км` + (rate ? ` · ${money(dkm * rate)}` : '');
   });
   const tasks = state.days.reduce((s, d) => s + d.rows.filter((r) => r.kind === 'task').length, 0);
-  $('totals').innerHTML = `<span>Дней: <b>${state.days.length}</b></span><span>Заданий: <b>${tasks}</b></span>
-    <span>Пробег: <b>${round1(km)} км</b></span><span>Сумма: <b>${rate ? money(km * rate) : 'укажите стоимость 1 км'}</b></span>`;
+  $('totals').innerHTML = `<div class="stat"><span>Дней</span><b>${state.days.length}</b></div>
+    <div class="stat"><span>Заданий</span><b>${tasks}</b></div>
+    <div class="stat"><span>Пробег</span><b>${round1(km)} км</b></div>
+    <div class="stat total"><span>Сумма</span><b>${rate ? money(km * rate) : '—'}</b>${rate ? '' : '<small>укажите стоимость 1 км</small>'}</div>`;
   const warns = [];
   if (!$('office').value.trim()) warns.push('не указан адрес базы');
   if (!rate) warns.push('не указана стоимость 1 км');
