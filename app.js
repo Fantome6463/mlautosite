@@ -1,6 +1,6 @@
 'use strict';
 
-const const SETTINGS = [
+const SETTINGS = [
   'fio',
   'branch',
   'assignment',
@@ -809,6 +809,34 @@ function recalcAll() {
   computeKm();
 }
 
+// накрутка изменилась — пересчитать только авто-км (из кэша маршрутов это быстро)
+function recalcKmMarkup() {
+  for (const day of state.days) day.rows.forEach((r) => { if (r.src === 'auto' || r.src === 'approx') resetKm(r); });
+  render();
+  computeKm();
+}
+
+/* ---------- окно настроек ---------- */
+
+function openSettings() {
+  $('settingsPanel').hidden = false;
+  document.body.classList.add('settings-open');
+  $('kmMarkup').focus();
+}
+function closeSettings() {
+  if ($('settingsPanel').hidden) return;
+  $('kmMarkup').blur(); // закрытие по Esc: blur вызовет change, если значение менялось
+  $('settingsPanel').hidden = true;
+  document.body.classList.remove('settings-open');
+  $('settingsBtn').focus();
+}
+function initSettingsPanel() {
+  $('settingsBtn').addEventListener('click', openSettings);
+  $('settingsClose').addEventListener('click', closeSettings);
+  $('settingsPanel').addEventListener('click', (e) => { if (e.target.hasAttribute('data-settings-close')) closeSettings(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSettings(); });
+}
+
 /* ---------- выгрузка в Excel ---------- */
 
 const THIN = { style: 'thin' };
@@ -995,6 +1023,7 @@ async function onFile(file) {
 
 function init() {
   initSettings();
+  initSettingsPanel();
   $('file').addEventListener('change', (e) => onFile(e.target.files[0]));
   const drop = $('drop');
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
