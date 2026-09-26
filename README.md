@@ -16,25 +16,19 @@
 
 Откройте `index.html` через любой статический сервер, например `python3 -m http.server`, или включите GitHub Pages (Settings → Pages → Deploy from branch).
 
-## Свой сервер: Windows + nginx
+## Свой сервер (Windows, рядом с CRM «Лаборатория 3Д»)
 
-Сайт статический — нужны только файлы из репозитория, без базы данных и PHP. Он встаёт рядом с уже работающими сайтами: nginx различает сайты по домену (`server_name`), поэтому IP и порты 80/443 у всех общие.
+Сайт статический, отдельного процесса у него нет. Его раздаёт тот же **Caddy**, что и CRM (New_Lab_3D): программа кладёт файл `marshrutnik.caddy` в `New_Lab_3D\deploy\sites.d\`, а Caddy сам получает HTTPS-сертификат. Основной конфиг CRM не меняется.
 
-Готовые файлы лежат в папке `deploy/`. Домен сайта — **маршрутник.рф**. В конфигах, командах и сертификатах кириллический домен пишется в техническом виде (punycode): `xn--80aqgfgraqi2c.xn--p1ai`. Пути `C:\nginx` и `C:\sites\marshrutnik` замените на свои, если они другие.
+Домен — **маршрутник.рф** (в DNS и сертификатах: `xn--80aqgfgraqi2c.xn--p1ai`).
 
-1. **DNS.** У регистратора домена добавьте записи `A @` и `A www` с IP вашего сервера — тем же, на который смотрит ваш текущий домен. Подождите 15 минут – пару часов.
-2. **Файлы сайта.** Установите [Git для Windows](https://git-scm.com/download/win) и выполните:
+1. **DNS.** У регистратора добавьте записи `A @` и `A www` с IP сервера — тем же, что у домена CRM.
+2. **Скачать сайт на сервер** (рядом с папкой CRM):
    ```
-   git clone -b claude/vigilant-hopper-4qqja3 https://github.com/fantome6463/mlautosite.git C:\sites\marshrutnik
+   git clone -b claude/vigilant-hopper-4qqja3 https://github.com/fantome6463/mlautosite.git
    ```
-3. **nginx.** Скопируйте `deploy\marshrutnik.conf` в `C:\nginx\conf\sites\`, в `C:\nginx\conf\nginx.conf` внутри блока `http { ... }` добавьте строку `include sites/marshrutnik.conf;` и перезагрузите nginx (`deploy\reload-nginx.bat`). Сайт откроется по адресу http://маршрутник.рф.
-4. **HTTPS.** Скачайте [win-acme](https://www.win-acme.com/) и выпустите бесплатный сертификат Let's Encrypt (команда в одну строку):
-   ```
-   wacs.exe --source manual --host xn--80aqgfgraqi2c.xn--p1ai,www.xn--80aqgfgraqi2c.xn--p1ai --validation filesystem --webroot C:\sites\marshrutnik --store pemfiles --pemfilespath C:\nginx\ssl --installation script --script C:\sites\marshrutnik\deploy\reload-nginx.bat
-   ```
-   win-acme сам создаст задачу в Планировщике и будет продлевать сертификат каждые ~60 дней, перезагружая nginx.
-5. **Включить HTTPS.** В `marshrutnik.conf` выполните «ШАГ 2» (он подписан в файле): включите перенаправление на https и раскомментируйте блок `listen 443`. Снова `reload-nginx.bat`.
+3. **Запустить `marshrutnik.bat`.** При первом запуске соберётся `Marshrutnik.exe` и откроется окно. Нажмите **«Подключить сайт»**.
 
-Если для двух текущих сайтов сертификаты уже выпускаются другим способом (например, через Certbot), выпустите сертификат для нового домена тем же способом — и укажите пути к нему в `ssl_certificate` / `ssl_certificate_key`.
+В окне видно, работает ли сайт, подключён ли он к Caddy, куда указывает домен и есть ли обновления. Кнопки: *Подключить сайт*, *Обновить сайт* (скачивает новую версию из GitHub — перезапускать ничего не нужно), *Открыть сайт*; в меню «...» — *Указать папку CRM*, *Отключить сайт*. Закрытие окна на работу сайта не влияет.
 
-**Обновление сайта:** запустите `deploy\update.ps1` (или `git pull` в папке сайта). Перезагружать nginx не нужно.
+То же из консоли: `marshrutnik.bat status | connect | update | disconnect`, `marshrutnik.bat crm D:\New_Lab_3D`.
