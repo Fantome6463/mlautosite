@@ -9,35 +9,44 @@
 <body>
 <header>
   <h1>Маршрутный лист из выгрузки</h1>
-  <p class="sub">Загрузите выгрузку заданий — сайт разложит их по дням, добавит выезды с базы и возвраты, посчитает километры и соберёт «Отчёт о служебных поездках» в Excel.</p>
+  <p class="sub">Загрузите выгрузку заданий — сайт разложит их по дням, добавит выезд с базы и возврат на базу, сам посчитает километры между точками и соберёт «Отчёт о служебных поездках» в Excel.</p>
 </header>
 
 <main>
   <section class="card">
-    <h2>1. Данные сотрудника</h2>
+    <h2>1. Основное</h2>
     <div class="grid">
+      <label class="req">Адрес базы (начало и конец рабочего дня)<input id="office" placeholder="г. Воронеж, ул. Космонавта Комарова, 8"></label>
+      <label class="req">Стоимость 1 км, руб.<input id="rate" inputmode="decimal" placeholder="например, 12,11"></label>
       <label>ФИО<input id="fio" list="fioList" placeholder="Выберите после загрузки выгрузки"></label>
       <datalist id="fioList"></datalist>
-      <label>Филиал<input id="branch" value="Воронежский"></label>
-      <label>Номер назначения<input id="assignment" placeholder="713851"></label>
-      <label>Адрес базы (начало и конец дня)<input id="office" value="г. ВОРОНЕЖ ул. Космонавта Комарова 8"></label>
-      <label>Затраты на 1 км, руб.<input id="rate" type="number" step="0.01" value="12.11"></label>
-      <label>Тип наряда<input id="orderType" value="Инсталляция"></label>
-      <label>Сегмент<input id="segment" value="B2C"></label>
-      <label>Код проекта<input id="projectCode"></label>
-      <label>Организация<input id="org" value="ПАО «Ростелеком»"></label>
-      <label>ИНН организации<input id="inn" value="7707049388"></label>
     </div>
-    <p class="hint">Настройки запоминаются в этом браузере.</p>
+    <details class="more">
+      <summary>Реквизиты для отчёта</summary>
+      <div class="grid">
+        <label>Филиал<input id="branch" value="Воронежский"></label>
+        <label>Номер назначения<input id="assignment"></label>
+        <label>Тип наряда<input id="orderType" value="Инсталляция"></label>
+        <label>Сегмент<input id="segment" value="B2C"></label>
+        <label>Код проекта<input id="projectCode"></label>
+        <label>Организация<input id="org" value="ПАО «Ростелеком»"></label>
+        <label>ИНН организации<input id="inn" value="7707049388"></label>
+      </div>
+    </details>
+    <p class="hint">Всё введённое запоминается в этом браузере.</p>
   </section>
 
   <section class="card">
     <h2>2. Выгрузка заданий</h2>
     <label class="drop" id="drop">
-      <input type="file" id="file" accept=".xlsx">
-      <span>Перетащите сюда .xlsx выгрузку или нажмите, чтобы выбрать файл</span>
+      <input type="file" id="file" accept=".xlsx,.xls,.xlsm,.csv">
+      <span>Перетащите сюда выгрузку (.xlsx, .xls, .csv) или нажмите, чтобы выбрать файл</span>
     </label>
     <div id="loadInfo" class="hint"></div>
+    <div id="mapping" hidden>
+      <h3>Колонки выгрузки <span class="hint">определены автоматически — поправьте, если что-то не так</span></h3>
+      <div class="grid" id="mapGrid"></div>
+    </div>
     <div class="grid" id="filters" hidden>
       <label>Отчётный месяц<select id="month"></select></label>
     </div>
@@ -46,11 +55,10 @@
   <section class="card" id="routeCard" hidden>
     <h2>3. Маршрут</h2>
     <div class="toolbar">
-      <button id="autoKm" type="button">Посчитать км автоматически</button>
-      <button id="clearKm" type="button" class="ghost">Очистить км</button>
-      <span id="autoStatus" class="hint"></span>
+      <button id="recalc" type="button">Пересчитать км</button>
+      <span id="kmStatus" class="hint"></span>
     </div>
-    <p class="hint">Км — расстояние от предыдущей точки до этой. Автоподсчёт — по дорогам (OpenStreetMap), результат лучше проверить. Введённые вручную расстояния запоминаются и подставляются в следующий раз для тех же пар адресов.</p>
+    <p class="hint">Км в строке — расстояние по дорогам от предыдущей точки до этой. Выезд с базы — 0 км, возврат на базу — от последней точки дня. Любое число можно исправить вручную: оно запомнится для этой пары адресов.</p>
     <div id="days"></div>
     <div class="totals" id="totals"></div>
   </section>
@@ -62,6 +70,7 @@
   </section>
 </main>
 
+<script src="lib/xlsx.full.min.js"></script>
 <script src="lib/exceljs.min.js"></script>
 <script src="app.js"></script>
 </body>

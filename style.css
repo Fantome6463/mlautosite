@@ -98,3 +98,14 @@ td.time { white-space: nowrap; color: var(--muted); }
 td.act { white-space: nowrap; text-align: right; }
 .totals { margin-top: 18px; font-size: 16px; display: flex; gap: 24px; flex-wrap: wrap; }
 .totals b { font-size: 18px; }
+label.req { color: var(--text); font-weight: 500; }
+input.missing { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, var(--card)); }
+details.more { margin-top: 14px; }
+details.more summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-bottom: 10px; }
+#mapping h3 { font-size: 15px; margin: 16px 0 8px; }
+#mapping h3 .hint { font-weight: 400; margin-left: 6px; }
+#filters { margin-top: 14px; }
+.src { font-size: 11px; margin-left: 6px; color: var(--muted); white-space: nowrap; }
+.src.none, .src.approx { color: var(--warn); }
+.src.manual { color: var(--accent); }
+td.num { white-space: nowrap; }
