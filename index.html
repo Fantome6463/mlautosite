@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Маршрутный лист из выгрузки</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Маршрутный лист из выгрузки</h1>
+  <p class="sub">Загрузите выгрузку заданий — сайт разложит их по дням, добавит выезды с базы и возвраты, посчитает километры и соберёт «Отчёт о служебных поездках» в Excel.</p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>1. Данные сотрудника</h2>
+    <div class="grid">
+      <label>ФИО<input id="fio" list="fioList" placeholder="Выберите после загрузки выгрузки"></label>
+      <datalist id="fioList"></datalist>
+      <label>Филиал<input id="branch" value="Воронежский"></label>
+      <label>Номер назначения<input id="assignment" placeholder="713851"></label>
+      <label>Адрес базы (начало и конец дня)<input id="office" value="г. ВОРОНЕЖ ул. Космонавта Комарова 8"></label>
+      <label>Затраты на 1 км, руб.<input id="rate" type="number" step="0.01" value="12.11"></label>
+      <label>Тип наряда<input id="orderType" value="Инсталляция"></label>
+      <label>Сегмент<input id="segment" value="B2C"></label>
+      <label>Код проекта<input id="projectCode"></label>
+      <label>Организация<input id="org" value="ПАО «Ростелеком»"></label>
+      <label>ИНН организации<input id="inn" value="7707049388"></label>
+    </div>
+    <p class="hint">Настройки запоминаются в этом браузере.</p>
+  </section>
+
+  <section class="card">
+    <h2>2. Выгрузка заданий</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".xlsx">
+      <span>Перетащите сюда .xlsx выгрузку или нажмите, чтобы выбрать файл</span>
+    </label>
+    <div id="loadInfo" class="hint"></div>
+    <div class="grid" id="filters" hidden>
+      <label>Отчётный месяц<select id="month"></select></label>
+    </div>
+  </section>
+
+  <section class="card" id="routeCard" hidden>
+    <h2>3. Маршрут</h2>
+    <div class="toolbar">
+      <button id="autoKm" type="button">Посчитать км автоматически</button>
+      <button id="clearKm" type="button" class="ghost">Очистить км</button>
+      <span id="autoStatus" class="hint"></span>
+    </div>
+    <p class="hint">Км — расстояние от предыдущей точки до этой. Автоподсчёт — по дорогам (OpenStreetMap), результат лучше проверить. Введённые вручную расстояния запоминаются и подставляются в следующий раз для тех же пар адресов.</p>
+    <div id="days"></div>
+    <div class="totals" id="totals"></div>
+  </section>
+
+  <section class="card" id="exportCard" hidden>
+    <h2>4. Скачать</h2>
+    <button id="download" type="button" class="primary">Скачать отчёт .xlsx</button>
+    <span id="warn" class="warn"></span>
+  </section>
+</main>
+
+<script src="lib/exceljs.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
