@@ -117,6 +117,25 @@
     <span id="warn" class="warn"></span>
   </section>
 
+  <section class="card support" id="support" hidden>
+    <div class="support-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z" fill="currentColor"/></svg>
+    </div>
+    <div class="support-text">
+      <h2>Поддержать Маршрутник</h2>
+      <p>Сайт бесплатный и без рекламы. Если он сэкономил вам вечер над маршрутным листом, можно поддержать проект любой суммой. Деньги пойдут на хостинг, домен и новые функции.</p>
+      <div class="support-pay">
+        <div class="card-num">
+          <span class="card-label">Карта<span id="supportBank"></span></span>
+          <b id="supportCard"></b>
+          <small id="supportName"></small>
+        </div>
+        <button id="supportCopy" type="button" class="ghost">Скопировать номер</button>
+      </div>
+      <p class="hint">Спасибо, это правда помогает ♥</p>
+    </div>
+  </section>
+
   <section class="card faq">
     <h2>Частые вопросы</h2>
     <details>
@@ -146,7 +165,7 @@
   </section>
 </main>
 
-<footer>Маршрутник · работает прямо в браузере</footer>
+<footer>Маршрутник · работает прямо в браузере<span id="supportLink" hidden> · <a href="#support">поддержать проект</a></span></footer>
 
 <script src="lib/xlsx.full.min.js"></script>
 <script src="lib/exceljs.min.js"></script>

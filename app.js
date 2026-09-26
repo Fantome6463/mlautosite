@@ -13,6 +13,12 @@ const SETTINGS = [
   'inn',
   'kmMarkup'
 ];
+// Поддержка проекта: впишите номер карты — блок появится на сайте. Пустой номер — блок скрыт.
+const SUPPORT = {
+  card: '',   // например: '2200 1234 5678 9012'
+  bank: '',   // например: 'Т-Банк'
+  name: '',   // получатель, например: 'Денис С.'
+};
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const WEEKDAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 
@@ -1023,8 +1029,31 @@ async function onFile(file) {
   }
 }
 
+function initSupport() {
+  const digits = SUPPORT.card.replace(/\D/g, '');
+  if (!digits) return;
+  $('supportCard').textContent = digits.replace(/(\d{4})(?=\d)/g, '$1 ');
+  $('supportBank').textContent = SUPPORT.bank ? ' · ' + SUPPORT.bank : '';
+  $('supportName').textContent = SUPPORT.name ? 'Получатель: ' + SUPPORT.name : '';
+  $('support').hidden = false;
+  $('supportLink').hidden = false;
+  const btn = $('supportCopy');
+  btn.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(digits); }
+    catch {
+      const r = document.createRange(); r.selectNodeContents($('supportCard'));
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      document.execCommand('copy');
+    }
+    btn.textContent = 'Скопировано ✓';
+    btn.classList.add('done');
+    setTimeout(() => { btn.textContent = 'Скопировать номер'; btn.classList.remove('done'); }, 2000);
+  });
+}
+
 function init() {
   initSettings();
+  initSupport();
   initSettingsPanel();
   $('file').addEventListener('change', (e) => onFile(e.target.files[0]));
   const drop = $('drop');

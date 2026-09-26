@@ -378,6 +378,42 @@ td.act { white-space: nowrap; text-align: right; width: 1%; }
   border-radius: 10px; background: var(--warn-soft);
 }
 
+/* ---------- поддержка ---------- */
+.support {
+  display: flex; gap: 18px; align-items: flex-start;
+  background:
+    radial-gradient(420px 200px at 100% 0%, color-mix(in srgb, #ec4899 10%, transparent), transparent 70%),
+    var(--card);
+}
+.support[hidden] { display: none; }
+.support-icon {
+  width: 46px; height: 46px; flex: none;
+  display: grid; place-items: center;
+  border-radius: 14px;
+  color: #fff;
+  background: linear-gradient(135deg, #ec4899, var(--accent));
+  box-shadow: 0 10px 22px -10px #ec4899;
+}
+.support-icon svg { width: 22px; height: 22px; }
+.support-text { min-width: 0; }
+.support-text p { margin: 0 0 16px; color: var(--muted); max-width: 640px; }
+.support-text .hint { margin: 14px 0 0; }
+.support-pay { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.card-num {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 12px 18px;
+  border-radius: 14px;
+  background: var(--field);
+  border: 1px solid var(--line);
+}
+.card-label { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+.card-num b { font-size: 20px; font-weight: 800; letter-spacing: 1px; font-variant-numeric: tabular-nums; user-select: all; }
+.card-num small { font-size: 13px; color: var(--muted); }
+.card-num small:empty { display: none; }
+button.done, button.done:hover { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+footer a { color: var(--accent-ink); text-decoration: none; font-weight: 600; }
+footer a:hover { text-decoration: underline; }
+
 /* ---------- частые вопросы ---------- */
 .faq h2 { margin-bottom: 10px; }
 .faq details { border-top: 1px solid var(--line); }
@@ -457,6 +493,9 @@ body.settings-open { overflow: hidden; }
   tr.base { grid-template-areas: "n addr addr" "n km act"; }
   tr.base td.time, tr.base td.ord { display: none; }
   .totals { grid-template-columns: 1fr 1fr; }
+  .support { flex-direction: column; gap: 14px; }
+  .card-num, .support-pay button { width: 100%; }
+  .card-num b { font-size: 18px; }
   .stat b { font-size: 20px; }
   button.big { width: 100%; }
   #exportCard .warn:not(:empty) { margin: 12px 0 0; display: block; }
