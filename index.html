@@ -3,26 +3,45 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Маршрутный лист из выгрузки</title>
+<title>Маршрутник — маршрутный лист из выгрузки</title>
+<meta name="description" content="Загрузите выгрузку заданий — получите готовый отчёт о служебных поездках с посчитанным километражем.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237b3fe4'/%3E%3Cpath d='M9 23c0-6 14-4 14-10a4 4 0 0 0-8 0' fill='none' stroke='%23fff' stroke-width='2.6' stroke-linecap='round'/%3E%3Ccircle cx='9' cy='23' r='2.6' fill='%23fff'/%3E%3Ccircle cx='23' cy='13' r='2.6' fill='%23fff'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>Маршрутный лист из выгрузки</h1>
-  <p class="sub">Загрузите выгрузку заданий — сайт разложит их по дням, добавит выезд с базы и возврат на базу, сам посчитает километры между точками и соберёт «Отчёт о служебных поездках» в Excel.</p>
+<header class="hero">
+  <div class="hero-in">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="8" fill="currentColor"/>
+        <path d="M9 23c0-6 14-4 14-10a4 4 0 0 0-8 0" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
+        <circle cx="9" cy="23" r="2.6" fill="#fff"/><circle cx="23" cy="13" r="2.6" fill="#fff"/>
+      </svg>
+      <span class="name">Маршрутник</span>
+    </div>
+    <h1>Маршрутный лист из выгрузки — за пару минут</h1>
+    <p class="lead">Загрузите выгрузку заданий, и Маршрутник сам разложит адреса по дням, посчитает километры по дорогам и соберёт готовый «Отчёт о служебных поездках» в Excel.</p>
+    <ol class="steps">
+      <li><b>Укажите базу и стоимость 1 км</b><span>Один раз — дальше сайт запомнит</span></li>
+      <li><b>Загрузите выгрузку</b><span>.xlsx, .xls или .csv в любом формате</span></li>
+      <li><b>Проверьте маршрут</b><span>Километры посчитаются сами</span></li>
+      <li><b>Скачайте отчёт</b><span>Готовый файл Excel с формулами</span></li>
+    </ol>
+  </div>
 </header>
 
 <main>
   <section class="card">
-    <h2>1. Основное</h2>
+    <h2><span class="badge">1</span>Основное</h2>
+    <p class="intro">С адреса базы начинается и на нём заканчивается каждый рабочий день. Стоимость 1 км — ставка возмещения, которая действует у вас.</p>
     <div class="grid">
-      <label class="req">Адрес базы (начало и конец рабочего дня)<input id="office" placeholder="г. Воронеж, ул. Космонавта Комарова, 8"></label>
-      <label class="req">Стоимость 1 км, руб.<input id="rate" inputmode="decimal" placeholder="например, 12,11"></label>
-      <label>ФИО<input id="fio" list="fioList" placeholder="Выберите после загрузки выгрузки"></label>
+      <label class="req">Адрес базы<input id="office" placeholder="г. Воронеж, ул. Космонавта Комарова, 8"></label>
+      <label class="req">Стоимость 1 км, ₽<input id="rate" inputmode="decimal" placeholder="например, 12,11"></label>
+      <label>ФИО сотрудника<input id="fio" list="fioList" placeholder="Подставится из выгрузки"></label>
       <datalist id="fioList"></datalist>
     </div>
     <details class="more">
-      <summary>Реквизиты для отчёта</summary>
+      <summary>Реквизиты для шапки отчёта</summary>
       <div class="grid">
         <label>Филиал<input id="branch" value="Воронежский"></label>
         <label>Номер назначения<input id="assignment"></label>
@@ -33,18 +52,20 @@
         <label>ИНН организации<input id="inn" value="7707049388"></label>
       </div>
     </details>
-    <p class="hint">Всё введённое запоминается в этом браузере.</p>
+    <p class="hint">Всё, что вы вводите, сохраняется только в этом браузере — в следующий раз заполнять заново не придётся.</p>
   </section>
 
   <section class="card">
-    <h2>2. Выгрузка заданий</h2>
+    <h2><span class="badge">2</span>Выгрузка заданий</h2>
+    <p class="intro">Подойдёт выгрузка в любом виде: колонки могут идти в любом порядке, называться по-разному, а лишние колонки не мешают. Нужны как минимум адрес и дата выполнения.</p>
     <label class="drop" id="drop">
       <input type="file" id="file" accept=".xlsx,.xls,.xlsm,.csv">
-      <span>Перетащите сюда выгрузку (.xlsx, .xls, .csv) или нажмите, чтобы выбрать файл</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span><b>Перетащите файл сюда</b> или нажмите, чтобы выбрать<br><small>.xlsx, .xls, .csv</small></span>
     </label>
     <div id="loadInfo" class="hint"></div>
     <div id="mapping" hidden>
-      <h3>Колонки выгрузки <span class="hint">определены автоматически — поправьте, если что-то не так</span></h3>
+      <h3>Что в каких колонках <span class="hint">определено автоматически — поправьте, если что-то не так</span></h3>
       <div class="grid" id="mapGrid"></div>
     </div>
     <div class="grid" id="filters" hidden>
@@ -53,22 +74,59 @@
   </section>
 
   <section class="card" id="routeCard" hidden>
-    <h2>3. Маршрут</h2>
+    <h2><span class="badge">3</span>Маршрут по дням</h2>
+    <p class="intro">Каждый день начинается с выезда с базы (0 км) и заканчивается возвратом на базу. Точки идут в порядке выполнения заданий. Км в строке — расстояние по дорогам от предыдущей точки до этой.</p>
     <div class="toolbar">
-      <button id="recalc" type="button">Пересчитать км</button>
+      <button id="recalc" type="button">↻ Пересчитать км</button>
       <span id="kmStatus" class="hint"></span>
     </div>
-    <p class="hint">Км в строке — расстояние по дорогам от предыдущей точки до этой. Выезд с базы — 0 км, возврат на базу — от последней точки дня. Любое число можно исправить вручную: оно запомнится для этой пары адресов.</p>
+    <ul class="legend">
+      <li><span class="src auto">авто</span> посчитано по карте</li>
+      <li><span class="src manual">вручную</span> исправлено вами — запомнится для этой пары адресов</li>
+      <li><span class="src approx">≈ примерно</span> адрес найден неточно — стоит проверить</li>
+      <li><span class="src none">нет на карте</span> впишите км сами</li>
+    </ul>
     <div id="days"></div>
     <div class="totals" id="totals"></div>
   </section>
 
   <section class="card" id="exportCard" hidden>
-    <h2>4. Скачать</h2>
+    <h2><span class="badge">4</span>Готово</h2>
+    <p class="intro">В файле будут все четыре раздела отчёта: детализация маршрута, топливная карта, реестр выплат и реестр чеков. Суммы считаются формулами, поэтому их можно поправить прямо в Excel.</p>
     <button id="download" type="button" class="primary">Скачать отчёт .xlsx</button>
     <span id="warn" class="warn"></span>
   </section>
+
+  <section class="card faq">
+    <h2>Частые вопросы</h2>
+    <details>
+      <summary>Как считаются километры?</summary>
+      <p>По дорогам между соседними точками дня, по данным открытых карт OpenStreetMap. Выезд с базы в начале дня — 0 км, возврат на базу — от последнего адреса дня до базы. Первый расчёт за месяц занимает пару минут, дальше результаты берутся из памяти браузера.</p>
+    </details>
+    <details>
+      <summary>Расстояние посчиталось неправильно — что делать?</summary>
+      <p>Просто впишите верное число в строке. Сайт отметит его как «вручную» и в следующий раз сам подставит это значение для той же пары адресов. Чтобы вернуть автоматический расчёт, очистите поле.</p>
+    </details>
+    <details>
+      <summary>Адрес не нашёлся на карте</summary>
+      <p>Такое бывает с новостройками и нестандартными адресами. Впишите км для этой строки вручную. Если на карте не находится база, напишите её адрес полностью, например: «Воронеж, ул. Космонавта Комарова, 8».</p>
+    </details>
+    <details>
+      <summary>Порядок точек не совпадает с реальным маршрутом</summary>
+      <p>Двигайте задания стрелками ↑ ↓, а лишние убирайте крестиком. Расстояния вокруг изменённых точек пересчитаются сами.</p>
+    </details>
+    <details>
+      <summary>Сайт не узнал колонки в моей выгрузке</summary>
+      <p>После загрузки появится блок «Что в каких колонках» — выберите там вручную, где адрес, где дата и так далее. Если адрес разбит на несколько колонок (город, улица, дом), укажите их как части адреса.</p>
+    </details>
+    <details>
+      <summary>Куда уходят мои данные?</summary>
+      <p>Файл обрабатывается прямо в браузере и никуда не загружается. Для подсчёта расстояний на сервис карт OpenStreetMap отправляются только адреса, без ФИО и номеров нарядов.</p>
+    </details>
+  </section>
 </main>
+
+<footer>Маршрутник · работает прямо в браузере</footer>
 
 <script src="lib/xlsx.full.min.js"></script>
 <script src="lib/exceljs.min.js"></script>
