@@ -23,7 +23,7 @@ function Write-Log([string]$Text, [string]$Kind = "info") { & $script:LogSink $T
 
 # ---------------------------------------------------------------- настройки
 function Read-Settings {
-    $s = [ordered]@{ domain = $script:DefaultDomain; crmRoot = "" }
+    $s = [ordered]@{ domain = $script:DefaultDomain; crmRoot = ""; previewPort = 8088 }
     if (Test-Path $script:SettingsFile) {
         try {
             $json = Get-Content -Path $script:SettingsFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -168,25 +168,30 @@ function Get-Crm {
 }
 
 # Блок для Caddy: статические файлы из папки сайта, HTTPS - автоматически (Let's Encrypt).
-function New-SiteText([string]$Domain, [string]$Ip, [bool]$WithWww) {
+# PreviewPort > 0 добавляет просмотр по IP без домена: http://<IP>:<порт>.
+function New-SiteText([string]$Domain, [string]$Ip, [bool]$WithWww, [int]$PreviewPort = 0) {
     $ascii = ConvertTo-AsciiDomain $Domain
     $rootPath = $script:Root.Replace('\', '/')
     $bind = if ($Ip) { "`tbind $Ip`n" } else { "" }
     $text = @"
 # Маршрутник ($Domain) - создано программой Маршрутника (deploy\app.ps1). Правки вручную перезапишутся.
-$ascii {
-$bind	root * "$rootPath"
+(marshrutnik_files) {
+	root * "$rootPath"
 	encode zstd gzip
 	@private path /.git* /.git/* /deploy/* /*.bat /*.exe /*.md
 	respond @private 404
 	header {
 		Cache-Control "no-cache"
-		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		-Server
 	}
 	file_server
+}
+
+$ascii {
+$bind	import marshrutnik_files
+	header Strict-Transport-Security "max-age=31536000"
 }
 "@
     if ($WithWww) {
@@ -197,7 +202,50 @@ $bind	redir https://$ascii{uri} permanent
 }
 "@
     }
+    if ($PreviewPort -gt 0) {
+        $text += @"
+
+# просмотр по IP, пока домен не заработал
+http://:$PreviewPort {
+$bind	import marshrutnik_files
+}
+"@
+    }
     return $text + "`n"
+}
+
+# Кто слушает порт: $null - свободен, "caddy" - наш Caddy, иначе имя программы.
+function Get-PortOwner([int]$Port) {
+    $connection = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $connection) { return $null }
+    $process = Get-Process -Id $connection.OwningProcess -ErrorAction SilentlyContinue
+    if ($process) { return $process.ProcessName }
+    return "PID $($connection.OwningProcess)"
+}
+
+# Порт для просмотра по IP: сохранённый, если свободен (или уже наш), иначе следующий свободный.
+function Get-PreviewPort {
+    $settings = Read-Settings
+    $port = [int]$settings.previewPort
+    if ($port -le 0) { return 0 }
+    for ($p = $port; $p -lt $port + 20; $p++) {
+        $owner = Get-PortOwner $p
+        if (-not $owner -or $owner -eq "caddy") {
+            if ($p -ne $port) { $settings.previewPort = $p; Save-Settings $settings }
+            return $p
+        }
+    }
+    return 0
+}
+
+$script:FirewallRule = "Маршрутник - просмотр по IP"
+function Open-FirewallPort([int]$Port) {
+    try {
+        Remove-NetFirewallRule -DisplayName $script:FirewallRule -ErrorAction SilentlyContinue
+        New-NetFirewallRule -DisplayName $script:FirewallRule -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile Any | Out-Null
+        Write-Log "Брандмауэр Windows: порт $Port открыт." "ok"
+    }
+    catch { Write-Log "Не удалось открыть порт $Port в брандмауэре (нужны права администратора): $($_.Exception.Message)" "warn" }
 }
 
 function Invoke-CaddyReload($Crm) {
@@ -222,7 +270,8 @@ function Connect-Site {
 
     New-Item -ItemType Directory -Force -Path $crm.SitesDir | Out-Null
     $previous = if (Test-Path $crm.SiteFile) { [IO.File]::ReadAllText($crm.SiteFile) } else { $null }
-    [IO.File]::WriteAllText($crm.SiteFile, (New-SiteText $domain $crm.Ip $withWww), (New-Object Text.UTF8Encoding($false)))
+    $previewPort = Get-PreviewPort
+    [IO.File]::WriteAllText($crm.SiteFile, (New-SiteText $domain $crm.Ip $withWww $previewPort), (New-Object Text.UTF8Encoding($false)))
 
     if (Test-Path $crm.Caddyfile) {
         $check = Invoke-Native { & $crm.Caddy validate --config $crm.Caddyfile --adapter caddyfile }
@@ -242,12 +291,17 @@ function Connect-Site {
     else {
         Write-Log "Caddy сейчас не запущен - сайт заработает, когда запустится CRM." "warn"
     }
+    if ($previewPort -gt 0) {
+        Open-FirewallPort $previewPort
+        Write-Log "Просмотр по IP (без домена): http://$($crm.Ip):$previewPort" "ok"
+    }
 }
 
 function Disconnect-Site {
     $crm = Get-Crm
     if (-not $crm -or -not (Test-Path $crm.SiteFile)) { Write-Log "Сайт и так не подключён." "warn"; return }
     Remove-Item $crm.SiteFile -Force
+    Remove-NetFirewallRule -DisplayName $script:FirewallRule -ErrorAction SilentlyContinue
     Write-Log "Сайт отключён от Caddy." "ok"
     if (Test-CaddyRunning) { [void](Invoke-CaddyReload $crm) }
 }
@@ -310,6 +364,14 @@ function Get-SiteStatus([switch]$NoFetch) {
     $dnsIp = Resolve-ARecord $ascii
     $expectedIp = if ($publicIp) { $publicIp } elseif ($crm) { $crm.Ip } else { $null }
 
+    $previewUrl = $null; $previewOnline = $false
+    $previewPort = [int]$settings.previewPort
+    if ($crm -and $crm.Ip -and $previewPort -gt 0 -and (Test-Path $crm.SiteFile) -and
+        (Select-String -Path $crm.SiteFile -Pattern "http://:$previewPort" -SimpleMatch -Quiet)) {
+        $previewUrl = "http://$($crm.Ip):$previewPort"
+        try { $previewOnline = ((Invoke-WebRequest -Uri "$previewUrl/" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200) } catch { }
+    }
+
     $online = $false
     try {
         $resp = Invoke-WebRequest -Uri "https://$ascii/" -UseBasicParsing -TimeoutSec 8
@@ -325,6 +387,9 @@ function Get-SiteStatus([switch]$NoFetch) {
         DnsIp        = $dnsIp
         ExpectedIp   = $expectedIp
         Online       = $online
+        PreviewUrl   = $previewUrl
+        PreviewOnline = $previewOnline
+        PublicIp     = $publicIp
         Version      = Get-VersionInfo -NoFetch:$NoFetch
     }
 }

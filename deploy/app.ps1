@@ -67,7 +67,7 @@ $card.ColumnCount = 2; $card.RowCount = 5
 [void]$card.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle("Percent", 100)))
 
 $script:StatusLabels = @{}
-foreach ($row in @(@("site", "Сайт"), @("crm", "CRM и Caddy"), @("dns", "Домен (DNS)"), @("ver", "Версия"), @("hint", ""))) {
+foreach ($row in @(@("site", "Сайт"), @("ip", "По IP"), @("crm", "CRM и Caddy"), @("dns", "Домен (DNS)"), @("ver", "Версия"), @("hint", ""))) {
     $name = New-Object Windows.Forms.Label
     $name.Text = $row[1]; $name.ForeColor = $ColMuted; $name.AutoSize = $true; $name.Margin = New-Object Windows.Forms.Padding(0, 5, 0, 5)
     $value = New-Object Windows.Forms.Label
@@ -111,6 +111,7 @@ $menu = New-Object Windows.Forms.ContextMenuStrip
 $miCrm = $menu.Items.Add("Указать папку CRM...")
 $miDisconnect = $menu.Items.Add("Отключить сайт")
 $miFolder = $menu.Items.Add("Открыть папку сайта")
+$miIp = $menu.Items.Add("Скопировать адрес по IP")
 
 # журнал
 $log = New-Object Windows.Forms.RichTextBox
@@ -193,6 +194,10 @@ function Show-Status($s) {
     elseif ($s.Connected) { Set-Status "site" ("● подключён, но пока не отвечает") $ColYellow }
     else { Set-Status "site" "● не подключён" $ColRed }
 
+    if (-not $s.PreviewUrl) { Set-Status "ip" "появится после «Подключить сайт»" $ColMuted }
+    elseif ($s.PreviewOnline) { Set-Status "ip" "$($s.PreviewUrl) - открывается" $ColGreen }
+    else { Set-Status "ip" "$($s.PreviewUrl) - не отвечает (Caddy запущен?)" $ColYellow }
+
     if (-not $s.Crm) { Set-Status "crm" "CRM не найдена - укажите папку через «...»" $ColRed }
     elseif (-not $s.CaddyRunning) { Set-Status "crm" "$($s.Crm.Root) - Caddy не запущен (запустите CRM)" $ColYellow }
     else { Set-Status "crm" "$($s.Crm.Root) - Caddy работает" $ColGreen }
@@ -210,8 +215,8 @@ function Show-Status($s) {
     # подсказка: что сделать дальше
     $hint = ""
     if (-not $s.Crm) { $hint = "Нажмите «...» -> «Указать папку CRM» и выберите папку New_Lab_3D." }
-    elseif (-not $s.DnsIp) { $hint = "У регистратора домена добавьте записи A для @ и www -> $($s.ExpectedIp). Затем «Подключить сайт»." }
-    elseif (-not $s.Connected) { $hint = "Нажмите «Подключить сайт»." }
+    elseif (-not $s.Connected) { $hint = "Нажмите «Подключить сайт» - сайт сразу откроется по IP, а по домену - как только заработает DNS." }
+    elseif (-not $s.DnsIp) { $hint = "Пока домен не заработал, сайт открывается по IP. В REG.RU добавьте записи A для @ и www -> $($s.ExpectedIp), потом снова «Подключить сайт»." }
     elseif (-not $s.Online -and $s.DnsIp -eq $s.ExpectedIp) { $hint = "Сертификат может выпускаться 1-2 минуты. Если долго - проверьте, что порты 80 и 443 открыты. С самого сервера сайт иногда не открывается из-за роутера - проверьте с телефона." }
     elseif ($v.behind -gt 0) { $hint = "Нажмите «Обновить сайт»: " + (($v.commits | Select-Object -First 3) -join "; ") }
     Set-Status "hint" $hint $ColMuted
@@ -220,7 +225,7 @@ function Show-Status($s) {
 }
 
 function Start-Check {
-    foreach ($k in @("site", "crm", "dns", "ver")) { Set-Status $k "проверяю..." $ColMuted }
+    foreach ($k in @("site", "ip", "crm", "dns", "ver")) { Set-Status $k "проверяю..." $ColMuted }
     Start-Background "Get-SiteStatus" { param($r) Show-Status $r }
 }
 
@@ -229,11 +234,17 @@ $btnCheck.Add_Click({ Start-Check })
 $btnConnect.Add_Click({ Start-Background "Connect-Site" { Start-Check } })
 $btnUpdate.Add_Click({ Start-Background "Update-Site" { Start-Check } })
 $btnOpen.Add_Click({
+    # пока домен не отвечает, открываем просмотр по IP
+    if ($script:Status -and -not $script:Status.Online -and $script:Status.PreviewUrl) { Start-Process "$($script:Status.PreviewUrl)/"; return }
     $domain = if ($script:Status) { $script:Status.Ascii } else { ConvertTo-AsciiDomain (Read-Settings).domain }
     Start-Process "https://$domain/"
 })
 $btnMore.Add_Click({ $menu.Show($btnMore, (New-Object Drawing.Point(0, $btnMore.Height))) })
 $miFolder.Add_Click({ Start-Process explorer.exe $script:Root })
+$miIp.Add_Click({
+    if ($script:Status -and $script:Status.PreviewUrl) { [Windows.Forms.Clipboard]::SetText($script:Status.PreviewUrl); Add-LogLine "Скопировано: $($script:Status.PreviewUrl)" "ok" }
+    else { Add-LogLine "Адрес по IP появится после «Подключить сайт»." "warn" }
+})
 $miDisconnect.Add_Click({
     $answer = [Windows.Forms.MessageBox]::Show("Отключить сайт? Он перестанет открываться, пока не подключите снова.", "Маршрутник", "YesNo", "Question")
     if ($answer -eq "Yes") { Start-Background "Disconnect-Site" { Start-Check } }

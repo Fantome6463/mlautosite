@@ -26,6 +26,7 @@ try {
             $s = Get-SiteStatus
             Write-Log "Маршрутник - $($s.Domain)" "step"
             Write-Log ("Сайт       : " + $(if ($s.Online) { "https://$($s.Domain) отвечает" } else { "не отвечает" })) $(if ($s.Online) { "ok" } else { "warn" })
+            Write-Log ("По IP      : " + $(if ($s.PreviewUrl) { "$($s.PreviewUrl)" + $(if ($s.PreviewOnline) { " открывается" } else { " не отвечает" }) } else { "после connect" })) $(if ($s.PreviewOnline) { "ok" } else { "warn" })
             Write-Log ("CRM        : " + $(if ($s.Crm) { $s.Crm.Root } else { "не найдена" })) $(if ($s.Crm) { "ok" } else { "err" })
             Write-Log ("Подключён  : " + $(if ($s.Connected) { "да" } else { "нет" })) $(if ($s.Connected) { "ok" } else { "warn" })
             Write-Log ("Caddy      : " + $(if ($s.CaddyRunning) { "запущен" } else { "не запущен" })) $(if ($s.CaddyRunning) { "ok" } else { "warn" })
