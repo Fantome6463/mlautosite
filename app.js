@@ -19,6 +19,8 @@ const SUPPORT = {
   bank: '',   // например: 'Т-Банк'
   name: '',   // получатель, например: 'Денис С.'
 };
+// Яндекс Метрика: впишите номер счётчика (metrika.yandex.ru → «Добавить счётчик»). Пусто — метрика не подключается.
+const METRIKA_ID = '';
 const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const WEEKDAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 
@@ -32,6 +34,27 @@ const state = {
   tasks: [],   // [{ addr, num, execs, dt }]
   days: [],    // [{ key: 'YYYY-MM-DD', rows: [{ kind: 'base'|'task'|'return', addr, num, time, km, src }] }]
 };
+
+/* ---------- метрика (Яндекс Метрика) ---------- */
+
+// Грузит счётчик, если указан METRIKA_ID. Вебвизор выключен: он записывал бы адреса и ФИО со страницы.
+function initMetrika() {
+  const id = Number(METRIKA_ID);
+  if (!id) return;
+  window.ym = window.ym || function () { (window.ym.a = window.ym.a || []).push(arguments); };
+  window.ym.l = Date.now();
+  const s = document.createElement('script');
+  s.async = true;
+  s.src = 'https://mc.yandex.ru/metrika/tag.js';
+  document.head.appendChild(s);
+  window.ym(id, 'init', { clickmap: true, trackLinks: true, accurateTrackBounce: true, webvisor: false });
+}
+// Цель в Метрике. В параметры — только числа и служебные значения, без адресов и ФИО.
+function goal(name, params) {
+  const id = Number(METRIKA_ID);
+  if (!id || !window.ym) return;
+  try { window.ym(id, 'reachGoal', name, params); } catch { /* ignore */ }
+}
 
 /* ---------- localStorage (может быть недоступен) ---------- */
 
@@ -322,6 +345,7 @@ function renderMapping() {
 }
 
 function onMappingChange(e) {
+  goal('mapping_manual');
   if (e.target.id === 'mapSheet') {
     selectSheet(+e.target.value);
   } else if (e.target.dataset.map) {
@@ -560,12 +584,14 @@ function onKmInput(e) {
   // change: зафиксировать ручное значение, пустое — вернуть автоподсчёт
   if (e.target.value === '') {
     rememberKm(rows[ri - 1].addr, row.addr, '');
+    goal('km_reset');
     resetKm(row);
     scheduleKm();
   } else {
     row.km = num(e.target.value);
     row.src = 'manual';
     rememberKm(rows[ri - 1].addr, row.addr, row.km);
+    goal('km_manual');
   }
   updateKmCell(di, ri);
   renderTotals();
@@ -579,11 +605,13 @@ function onDaysClick(e) {
     const rows = state.days[di].rows;
     [rows[ri], rows[ri + dir]] = [rows[ri + dir], rows[ri]];
     const lo = Math.min(ri, ri + dir);
+    goal('row_move');
     [lo, lo + 1, lo + 2].forEach((i) => resetKm(rows[i]));
   } else if (b.dataset.del) {
     const [di, ri] = b.dataset.del.split(':').map(Number);
     const rows = state.days[di].rows;
     rows.splice(ri, 1);
+    goal('row_delete');
     resetKm(rows[ri]);
     if (!rows.some((r) => r.kind === 'task')) state.days.splice(di, 1);
   } else return;
@@ -811,6 +839,7 @@ async function computeKm() {
 }
 
 function recalcAll() {
+  goal('km_recalc');
   geoMissSession.clear();
   for (const day of state.days) day.rows.forEach((r) => { if (r.src !== 'manual' && r.src !== 'memory') resetKm(r); });
   render();
@@ -827,6 +856,7 @@ function recalcKmMarkup() {
 /* ---------- окно настроек ---------- */
 
 function openSettings() {
+  goal('settings_open');
   $('settingsPanel').hidden = false;
   document.body.classList.add('settings-open');
   $('kmMarkup').focus();
@@ -992,7 +1022,10 @@ async function download() {
   const problems = [];
   if (!s.office) problems.push('адрес базы');
   if (!s.rate) problems.push('стоимость 1 км');
-  if (problems.length) { alert('Заполните: ' + problems.join(', ')); markRequired(); return; }
+  if (problems.length) { alert('Заполните: ' + problems.join(', ')); markRequired(); goal('download_blocked'); return; }
+  const days = state.days.length;
+  const tasks = state.days.reduce((n, d) => n + d.rows.filter((r) => r.kind === 'task').length, 0);
+  goal('download', { days, tasks });
   const wb = await buildWorkbook();
   const buf = await wb.xlsx.writeBuffer();
   const [y, m] = $('month').value.split('-');
@@ -1012,6 +1045,7 @@ async function download() {
 async function onFile(file) {
   if (!file) return;
   $('loadInfo').textContent = 'Читаю файл…';
+  const ext = (file.name.match(/\.(\w+)$/) || [, '?'])[1].toLowerCase();
   try {
     state.sheets = (await readFile(file)).filter((s) => s.rows.length);
     if (!state.sheets.length) throw new Error('файл пустой');
@@ -1024,8 +1058,10 @@ async function onFile(file) {
     });
     selectSheet(bestSheet);
     applyMapping();
+    goal('file_loaded', { ext, tasks: state.tasks.length, columnsFound: state.map.addr >= 0 && state.map.date >= 0 });
   } catch (e) {
     $('loadInfo').textContent = 'Не удалось прочитать файл: ' + e.message;
+    goal('file_error', { ext });
   }
 }
 
@@ -1039,6 +1075,7 @@ function initSupport() {
   $('supportLink').hidden = false;
   const btn = $('supportCopy');
   btn.addEventListener('click', async () => {
+    goal('support_copy');
     try { await navigator.clipboard.writeText(digits); }
     catch {
       const r = document.createRange(); r.selectNodeContents($('supportCard'));
@@ -1052,6 +1089,7 @@ function initSupport() {
 }
 
 function init() {
+  initMetrika();
   initSettings();
   initSupport();
   initSettingsPanel();
