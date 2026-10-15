@@ -2,9 +2,11 @@
 import {
   GOODS, RECIPES, ENTERPRISES, BUILDINGS, UNITS, CATEGORIES, CONTRACTORS, OWN, contractorInfo, RIVALS,
   NPC_QUALITY, IMPORT_MARKUP, WHOLESALE_RATE, SHOP_UNITS_PER_WORKER, TRANSPORT_PER_UNIT, ADVANCE,
+  HQ, HQ_MAX, hqLimit, hqUpgradeCost, specSalary,
 } from './data.js';
 import * as G from './game.js';
 import * as P from './production.js';
+import { CATS } from './ledger.js';
 
 const $ = s => document.querySelector(s);
 const esc = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -21,6 +23,35 @@ const entName = e => `${ENTERPRISES[e.type].icon} ${esc(e.name)}`;
 const bTitle = b => `${BUILDINGS[b.type].icon} ${BUILDINGS[b.type].name} №${b.id}`;
 const ownerName = (s, b) => (b.owner === 'player' ? esc(s.company) : esc(RIVALS[b.owner].name));
 const ownerColor = b => (b.owner === 'player' ? '#3b82f6' : RIVALS[b.owner].color);
+const fmtShort = v => (Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(Math.abs(v) >= 1e8 ? 0 : 1).replace('.', ',') + ' млн ₽' : fmt(v));
+const WEEK = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
+const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+// День игры → календарная дата: 1-й день — понедельник, 1 января 1-го года
+// Короткая дата как в Бизмании: 28.10.0001
+function shortDate(day) {
+  const d = new Date(Date.UTC(2001, 0, day));
+  return `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}.${String(d.getUTCFullYear() - 2000).padStart(4, '0')}`;
+}
+const weekOf = (hist = []) => hist.slice(-7).reduce((a, d) => ({ rev: a.rev + d.rev, exp: a.exp + d.exp }), { rev: 0, exp: 0 });
+const accountNo = s => `P${s.accNo}RUB${String((s.accNo * 7919) % 1000000).padStart(6, '0')}`;
+function canvas2d(c) {
+  const dpr = devicePixelRatio || 1;
+  c.width = c.clientWidth * dpr; c.height = c.clientHeight * dpr;
+  const x = c.getContext('2d'); x.scale(dpr, dpr);
+  x.font = '11px system-ui';
+  return { x, W: c.clientWidth, H: c.clientHeight };
+}
+// Группы товаров для «Товарооборота»
+function goodGroups() {
+  const g = { 'Сельскохозяйственная продукция': ['grain', 'milk', 'cotton'], 'Полезные ископаемые': ['wood', 'ore', 'oil', 'stone', 'sand'],
+    'Материалы': ['flour', 'lumber', 'steel', 'fabric', 'plastic', 'cement'], 'Строительные материалы': ['concrete', 'bricks', 'glass'],
+    'Продукты питания': ['bread', 'cheese'], 'Товары народного потребления': ['furniture', 'clothes', 'appliances', 'toys'] };
+  return g;
+}
+function gameDate(day) {
+  const d = new Date(Date.UTC(2001, 0, day));
+  return `${WEEK[d.getUTCDay()]}, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear() - 2000}-го года`;
+}
 
 export class UI {
   constructor(app) {
@@ -28,17 +59,16 @@ export class UI {
     this.sel = null;          // {kind:'plot', i, j} | {kind:'ent', id}
     this.tab = 'main';
     this.form = { type: 'residential', floors: 5, contractor: 'trest' };
-    this.win = null;
+    this.page = 'company';
+    this.coTab = 'main';
     this.winTab = 'goods';
     this.lastNews = null;
 
-    for (const el of [$('#side'), $('#modalBody')]) {
+    for (const el of [$('#side'), $('#pageBody')]) {
       el.addEventListener('click', e => this.onClick(e));
       el.addEventListener('change', e => this.onChange(e));
     }
-    $('#modalClose').onclick = () => this.closeWin();
-    $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') this.closeWin(); });
-    document.querySelectorAll('#menu button').forEach(b => b.onclick = () => (b.dataset.win === 'reset' ? this.reset() : this.openWin(b.dataset.win)));
+    document.querySelectorAll('[data-page]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); this.openPage(b.dataset.page, b.dataset.tab); }));
   }
 
   get s() { return this.app.state; }
@@ -57,19 +87,16 @@ export class UI {
   }
 
   // ---------- верхняя панель ----------
-  renderTop(frac) {
+  renderTop(msLeft, speed) {
     const s = this.s;
-    const last = s.history[s.history.length - 1] || { income: 0, expense: 0 };
-    const profit = last.income - last.expense;
-    $('#money').textContent = fmt(s.money);
-    $('#money').className = s.money < 0 ? 'neg' : '';
-    $('#worth').textContent = fmt(G.netWorth(s));
-    $('#profit').textContent = (profit > 0 ? '+' : '') + fmt(profit);
-    $('#profit').className = profit >= 0 ? 'pos' : 'neg';
+    $('#money').textContent = fmtShort(s.money);
+    $('#worth').textContent = fmtShort(G.netWorth(s));
     $('#pop').textContent = num(s.city.population || 0);
-    $('#day').textContent = s.day;
-    $('#dayBar').style.width = (frac * 100).toFixed(1) + '%';
-    $('#questDot').classList.toggle('on', G.QUESTS.some(q => !s.quests[q.id]) && this.win !== 'quests');
+    $('#hdrCompany').textContent = s.company;
+    $('#date').textContent = gameDate(s.day);
+    const sec = Math.ceil(msLeft / 1000);
+    $('#dayLeft').textContent = speed ? `${Math.floor(sec / 60)} мин. ${sec % 60} сек.${speed > 1 ? ` (×${speed})` : ''}` : 'пауза';
+    $('#questDot').classList.toggle('on', G.QUESTS.some(q => !s.quests[q.id]) && this.page !== 'quests');
     const n = s.news[0];
     if (n && n !== this.lastNews) {
       this.lastNews = n;
@@ -501,7 +528,7 @@ export class UI {
         if (r?.ok) this.toast('🚚 Поставка создана');
         this.renderSide(true); break;
       }
-      case 'cdel': this.app.act(() => P.removeContract(s, +t.dataset.id)); this.renderSide(true); if (this.win) this.openWin(this.win); break;
+      case 'cdel': this.app.act(() => P.removeContract(s, +t.dataset.id)); this.renderSide(true); this.refreshWin(); break;
       case 'create': {
         const type = t.dataset.type;
         const host = type === 'shop' ? +$('#shopHost')?.value : null;
@@ -509,13 +536,29 @@ export class UI {
         if (r?.enterprise) { this.toast(`${ENTERPRISES[type].icon} ${r.enterprise.name} создано`); this.closeWin(); this.app.selectEnt(r.enterprise.id); }
         break;
       }
-      case 'wtab': this.winTab = t.dataset.tab; this.openWin(this.win); break;
+      case 'wtab': this.winTab = t.dataset.tab; this.renderPage(); break;
+      case 'cotab': this.coTab = t.dataset.tab; this.renderPage(); this.markNav(); break;
+      case 'tocity': this.showCity(); break;
+      case 'entfilter': this.entFilter = t.dataset.k || null; this.renderPage(); break;
+      case 'finsub': ev.preventDefault(); this.finSub = t.dataset.k; this.txPage = 0; this.renderPage(); break;
+      case 'txpage': this.txPage = +t.dataset.p; this.renderPage(); break;
+      case 'rep': this.rep = t.dataset.k; this.txPage = 0; this.renderPage(); break;
+      case 'ggroup': ev.preventDefault(); this.goodsGroup = t.dataset.k; this.renderPage(); break;
+      case 'hire': { const r = run(() => P.hireSpec(s, +t.dataset.id)); if (r?.spec) this.toast(`🤝 ${r.spec.name} нанят${r.spec.job ? ' и назначен на ' + s.enterprises[r.spec.job].name : ''}`); this.renderPage(); break; }
+      case 'fire': if (confirm('Уволить специалиста?')) { this.app.act(() => P.fireSpec(s, +t.dataset.id)); this.renderPage(); } break;
+      case 'citytab': this.cityTab = t.dataset.k; this.renderPage(); this.markNav(); break;
+      case 'hq': run(() => G.upgradeHQ(s, t.dataset.k)); this.renderPage(); break;
+      case 'renamecity': {
+        const n = prompt('Название города', s.cityName);
+        if (n && n.trim()) { this.app.act(() => { s.cityName = n.trim().slice(0, 30); }); this.renderPage(); }
+        break;
+      }
       case 'loan': run(() => G.takeLoan(s, +$('#loanAmt').value)); this.openWin('bank'); break;
       case 'repay': this.app.act(() => G.repayLoan(s, +$('#loanAmt').value)); this.openWin('bank'); break;
       case 'reset': this.reset(); break;
       case 'rename': {
         const n = prompt('Название компании', s.company);
-        if (n && n.trim()) { this.app.act(() => { s.company = n.trim().slice(0, 40); }); this.openWin('company'); }
+        if (n && n.trim()) { this.app.act(() => { s.company = n.trim().slice(0, 40); }); this.renderPage(); }
         break;
       }
     }
@@ -528,7 +571,13 @@ export class UI {
       switch (act) {
         case 'fcontr': this.form.contractor = t.value; break;
         case 'rent': b.units[t.dataset.t].rent = Math.max(1, Math.round(+t.value || 1)); break;
-        case 'recipe': e.recipe = t.value; break;
+        case 'recipe':
+          if (P.canProduce(this.s, e, t.value)) e.recipe = t.value;
+          else this.toast(`Производственный отдел: не больше ${hqLimit(this.s, 'prod')} разных продуктов. Повысьте уровень в штаб-квартире.`, true);
+          break;
+        case 'assign': { const r = P.assignSpec(this.s, +t.dataset.id, +t.value || null); if (r.error) this.toast(r.error, true); break; }
+        case 'cover': this.app.world.setCoverage(t.dataset.k, t.checked, this.s); break;
+        case 'esalary': { const x = this.s.enterprises[t.dataset.id]; x.salary = Math.max(1, Math.round(+t.value || 1)); break; }
         case 'target': e.target = +t.value; break;
         case 'salary': e.salary = Math.max(1, Math.round(+t.value || 1)); break;
         case 'ename': if (t.value.trim()) e.name = t.value.trim().slice(0, 40); break;
@@ -540,43 +589,546 @@ export class UI {
     });
     if (t.type !== 'radio') t.blur();
     this.renderSide(true);
+    if ($('#page').contains(t)) this.renderPage();
   }
 
-  // ---------- окна ----------
+  // ---------- страницы (как в Бизмании: шапка, иконки разделов, страница) ----------
   openWin(name) {
-    this.win = name;
-    const titles = { company: '📊 Компания', enterprises: '🏭 Предприятия', contracts: '🚚 Поставки', market: '💹 Рынок', rating: '🏆 Рейтинг',
-      quests: '🎯 Задания', bank: '🏦 Банк', help: '❔ Как играть' };
-    $('#modalTitle').textContent = titles[name];
-    $('#modalBody').innerHTML = this[`win_${name}`](this.s);
-    $('#modal').hidden = false;
-    if (name === 'company') this.drawChart();
+    if (name === 'bank') return this.openPage('company', 'finance');
+    if (name === 'enterprises') return this.openPage('company', 'ent');
+    this.openPage(name);
   }
-  closeWin() { this.win = null; $('#modal').hidden = true; }
-  refreshWin() {
-    if (!this.win || $('#modalBody').contains(document.activeElement)) return;
-    const top = $('.win').scrollTop;
-    this.openWin(this.win);
-    $('.win').scrollTop = top;
+  closeWin() { /* окна заменены страницами */ }
+
+  openPage(name, tab) {
+    this.page = name;
+    if (name === 'company' && tab) this.coTab = tab;
+    if (name === 'city' && tab) this.cityTab = tab;
+    this.renderPage();
+    $('#page').scrollTop = 0;
+    this.markNav();
+  }
+  // Город: страница города на вкладке «Карта»
+  showCity() {
+    if (this.page === 'city' && this.cityTab === 'map') return;
+    this.openPage('city', 'map');
+  }
+  markNav() {
+    document.querySelectorAll('#toolbar button').forEach(b => {
+      const on = b.dataset.page === this.page && (this.page !== 'company' || b.dataset.tab === this.coTab);
+      b.classList.toggle('on', on);
+    });
   }
 
-  win_company(s) {
-    const blds = Object.values(s.buildings).filter(G.isPlayer);
+  renderPage() {
+    // 3D-карту не пересоздаём: убираем в запас и возвращаем в рамку на вкладке «Карта»
+    const view = $('#cityView');
+    $('#cityHolder').appendChild(view);
+    const fn = this[`page_${this.page}`] || (() => this.titled(this.page));
+    $('#pageBody').innerHTML = fn.call(this, this.s);
+    const slot = $('#mapSlot');
+    this.app.world.paused = !slot;
+    if (slot) { slot.appendChild(view); this.app.world.resize(); }
+    if (this.page === 'company' && this.coTab === 'main') this.drawChart();
+    if (this.page === 'company' && this.coTab === 'reports' && this.rep === 'charts') this.drawReportCharts();
+  }
+  refreshWin() {
+    if (this.page === 'city' && this.cityTab === 'map') return;
+    if ($('#page').contains(document.activeElement) && document.activeElement.matches('input,select')) return;
+    const top = $('#page').scrollTop;
+    this.renderPage();
+    $('#page').scrollTop = top;
+  }
+
+  titled(name) {
+    const t = { market: ['💹', 'Рынок'], contracts: ['🚚', 'Поставки'], rating: ['🏆', 'Рейтинг компаний'], quests: ['📝', 'Задания'], help: ['❔', 'Как играть'] }[name];
+    return `<div class="page-title"><span class="big">${t[0]}</span><h1>${t[1]}</h1></div>${this[`win_${name}`](this.s)}`;
+  }
+
+  // ---------- страница компании ----------
+  page_company(s) {
+    const tabs = [['main', 'Компания'], ['ent', 'Предприятия'], ['staff', 'Специалисты'], ['finance', 'Финансы'], ['reports', 'Отчёты']];
+    return `<div class="page-title"><span class="big">🏢</span><h1>Компания ${esc(s.company)}</h1>
+        <div class="acts"><button class="btn small" data-act="rename">✎ Переименовать</button></div></div>
+      <div class="ftabs">${tabs.map(([k, n]) => `<button data-act="cotab" data-tab="${k}" class="${this.coTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+      ${this[`co_${this.coTab}`](s)}`;
+  }
+
+  // сумма доходов/расходов за последние n дней
+  period(n = 7) {
+    const h = this.s.history.slice(-n);
+    const sum = (side, cat) => h.reduce((a, d) => a + (cat ? d[side]?.[cat] || 0 : side === 'inc' ? d.income : d.expense), 0);
+    return { days: h.length, sum };
+  }
+
+  companyLevel() { return Math.max(1, Math.floor(Math.log2(Math.max(1, G.netWorth(this.s)) / 125000)) + 1); }
+  efficiency() {
+    const s = this.s, ents = Object.values(s.enterprises), blds = Object.values(s.buildings).filter(b => G.isPlayer(b) && b.state === 'done' && Object.keys(b.units).length);
+    const vals = [...ents.map(e => Math.min(1, (e.workers / Math.max(1, e.target || 1)) * P.salaryEff(s, e))), ...blds.map(G.occRate)];
+    return vals.length ? vals.reduce((a, v) => a + v, 0) / vals.length : 1;
+  }
+
+  co_main(s) {
+    const p = this.period(7), rev = p.sum('inc'), exp = p.sum('exp'), profit = rev - exp;
+    const salary = Object.values(s.enterprises).reduce((a, e) => a + e.workers * e.salary, 0);
+    const supply = p.sum('exp', 'purchase'), assets = G.netWorth(s) + s.loan;
+    const blds = Object.values(s.buildings).filter(G.isPlayer), ents = Object.values(s.enterprises);
+    const place = G.rating(s).findIndex(r => r.player) + 1;
+    const eff = this.efficiency();
+    const tiles = [
+      ...blds.map(b => `<button class="tile" data-act="goplot" data-i="${b.i}" data-j="${b.j}" title="${bTitle(b)}${b.state === 'build' ? ' — стройка ' + pct(b.progress / b.buildDays) : ''}">
+        ${b.state === 'build' ? '🏗️' : BUILDINGS[b.type].icon}<span class="n">${b.floors}</span>${b.state === 'build' && b.paused ? '<span class="w">⛔</span>' : ''}</button>`),
+      ...ents.map(e => `<button class="tile" data-act="openent" data-id="${e.id}" title="${esc(e.name)}">${ENTERPRISES[e.type].icon}
+        ${e.level > 1 ? `<span class="n">${e.level}</span>` : ''}${this.entProblem(e) ? '<span class="w">⚠️</span>' : ''}</button>`),
+    ].join('');
+    const hq = Object.keys(HQ).map(k => {
+      const l = s.hq[k], used = { staff: P.staffTotal(s), manage: ents.length, prod: P.products(s).size, build: blds.filter(b => b.state === 'build').length }[k];
+      return `<div class="dept"><span class="star">${l}</span><div><div class="nm">${HQ[k].name}</div><div class="lim">${HQ[k].label}: ${num(used)} / ${num(hqLimit(s, k))}</div></div>
+        ${l < HQ_MAX ? `<button class="btn small" data-act="hq" data-k="${k}" ${s.money < hqUpgradeCost(l) ? 'disabled' : ''} title="Повысить уровень">⬆ ${fmtShort(hqUpgradeCost(l))}</button>` : ''}</div>`;
+    }).join('');
+    return `<div class="co-grid">
+      <div class="statlist">
+        <span>Наличные:</span><span>${fmt(s.money)}</span>
+        <span>Выручка<small>за ${p.days} дн.</small>:</span><span>${fmt(rev)}</span>
+        <span>Расходы:</span><span>${fmt(exp)}</span>
+        <span>Прибыль:</span><span class="${profit >= 0 ? 'pos' : 'neg'}">${fmt(profit)}</span>
+        <span>Рентабельность:</span><span>${rev ? ((profit / rev) * 100).toFixed(1) : '0.0'}%</span>
+      </div>
+      <div class="co-center">
+        <div class="chart-box"><canvas class="chart" id="chart"></canvas></div>
+        <div class="statlist">
+          <span>Активы:</span><span><b>${fmt(assets)}</b></span>
+          <span>Зарплата персонала:</span><span>${fmt(salary)}/день</span>
+          <span>Недельное снабжение:</span><span>${fmt(supply)}</span>
+          <span>Кредит:</span><span>${fmt(s.loan)}</span>
+        </div>
+      </div>
+      <div class="profile">Компания видна в рейтинге всем конкурентам
+        <div class="ava">🧑‍💼</div>${esc(s.company)}
+        <div style="margin-top:6px">Эффективность: <span class="eff"><i style="width:${Math.round(eff * 100)}%"></i></span> ${pct(eff)}</div>
+        <div style="margin-top:6px"><span class="star" title="Уровень компании">${this.companyLevel()}</span></div>
+      </div>
+
+      <div class="hq"><h2>Штаб-квартира</h2>${hq}
+        <p class="hint">Отделы задают лимиты: сколько можно нанять людей, держать предприятий, выпускать разных продуктов и вести строек одновременно.</p></div>
+      <div>
+        <div class="city-row"><span class="nm">🏙️ ${esc(s.cityName)}</span>
+          <span title="Выручка за неделю">💵 ${fmtShort(rev)}</span><span title="Прибыль за неделю">📈 ${fmtShort(profit)}</span><span title="Активы">💰 ${fmtShort(assets)}</span>
+          <button class="btn small" data-act="tocity">🌐 В город</button></div>
+        <div class="icons">${tiles || '<span class="hint">Пока пусто. Откройте город 🌐 и закажите стройку на свободном участке или создайте предприятие во вкладке «Предприятия».</span>'}</div>
+      </div>
+      <div class="medals">
+        <div class="medal" title="Место в рейтинге">${place}<small>место</small></div>
+        <div class="medal v" title="Выполнено заданий">${Object.keys(s.quests).length}<small>заданий</small></div>
+        <div class="medal v" title="Зданий">${blds.length}<small>зданий</small></div>
+        <div class="medal c" title="Предприятий">${ents.length}<small>предпр.</small></div>
+      </div>
+    </div>`;
+  }
+
+  // ---------- вкладка «Предприятия» (как в Бизмании) ----------
+  // Все объекты компании одним списком: здания в городе + виртуальные предприятия
+  companyUnits() {
+    const s = this.s, rows = [];
+    for (const b of Object.values(s.buildings).filter(G.isPlayer)) {
+      const w = weekOf(b.hist);
+      rows.push({ key: 'b:' + b.type, icon: b.state === 'build' ? '🏗️' : BUILDINGS[b.type].icon, kind: BUILDINGS[b.type].name, name: bTitle(b).replace(/^\S+ /, ''),
+        link: `data-act="goplot" data-i="${b.i}" data-j="${b.j}"`, level: b.floors,
+        eff: b.state === 'build' ? b.progress / b.buildDays : BUILDINGS[b.type].category === 'social' ? 1 : G.occRate(b),
+        products: b.state === 'build' ? `<span class="hint">стройка ${pct(b.progress / b.buildDays)}</span>` : Object.keys(b.units).map(t => `<span title="${UNITS[t].name}">${UNITS[t].icon}</span>`).join('') || '🛡️',
+        rev: w.rev, exp: w.exp, assets: b.state === 'done' ? G.marketValue(b) : G.invested(b),
+        problem: b.state === 'build' && b.paused ? '⛔ Стройка стоит' : b.state === 'done' && Object.keys(b.units).length && G.occRate(b) < 0.5 ? '% Мало арендаторов — снизьте аренду' : null });
+    }
+    for (const e of Object.values(s.enterprises)) {
+      const w = weekOf(e.hist);
+      const goods = e.type === 'shop' ? Object.keys(e.stock).filter(g => GOODS[g].kind === 'retail') : e.type === 'lab' ? (e.research ? [e.research] : [])
+        : e.type === 'construction' || e.type === 'warehouse' ? Object.keys(e.stock) : e.recipe ? [e.recipe] : [];
+      let stock = 0;
+      for (const g in e.stock) stock += e.stock[g].qty * s.prices[g] * 0.6;
+      rows.push({ key: 'e:' + e.type, icon: ENTERPRISES[e.type].icon, kind: ENTERPRISES[e.type].name, name: esc(e.name), link: `data-act="openent" data-id="${e.id}"`,
+        level: e.level, eff: Math.min(1, (e.workers / Math.max(1, P.maxWorkers(e))) * P.salaryEff(this.s, e) * P.specBonus(this.s, e)),
+        products: goods.map(g => `<span title="${GOODS[g].name}">${GOODS[g].icon}</span>`).join(''), rev: w.rev, exp: w.exp,
+        assets: Math.round(e.invested * 0.6 + stock), problem: this.entProblem(e), contracts: s.contracts.some(c => c.from === e.id || c.to === e.id) });
+    }
+    return rows;
+  }
+
+  co_ent(s) {
+    const rows = this.companyUnits();
+    const kinds = [...new Map(rows.map(r => [r.key, r])).values()];
+    const list = this.entFilter ? rows.filter(r => r.key === this.entFilter) : rows;
+    let h = `<div class="filters"><button class="tile ${!this.entFilter ? 'on' : ''}" data-act="entfilter" data-k="" title="Все">🗂️</button>
+      ${kinds.map(r => `<button class="tile ${this.entFilter === r.key ? 'on' : ''}" data-act="entfilter" data-k="${r.key}" title="${r.kind}">${r.icon}</button>`).join('')}</div>`;
+    if (!rows.length) h += '<p class="hint">У компании пока нет предприятий и зданий.</p>';
+    else h += `<table class="grid"><tr><th>Город</th><th>Предприятие</th><th>Уровень</th><th>Эффект.</th><th>Продукты</th><th class="r">Прибыль (7 дн.)</th><th class="r">Активы</th><th>Проблемы</th></tr>
+      ${list.map(r => `<tr><td>🏙️ ${esc(s.cityName)}</td><td><span class="ico">${r.icon}</span> <a href="#" ${r.link}>${r.name}</a></td>
+        <td><span class="star sm">${r.level}</span></td><td><span class="effbar"><i style="width:${Math.round(r.eff * 100)}%"></i></span></td>
+        <td class="prods">${r.products}</td><td class="r ${r.rev - r.exp >= 0 ? '' : 'neg'}">${fmt(r.rev - r.exp)}</td><td class="r">${fmt(r.assets)}</td>
+        <td>${r.problem ? `<span title="${esc(r.problem)}">${r.problem.startsWith('⛔') ? '⛔' : r.problem.startsWith('%') ? '📉' : '⚠️'}</span>` : ''}${r.contracts ? ' <span title="Есть поставки">🚚</span>' : ''}</td></tr>`).join('')}</table>`;
+    return h + `<h3>Создать предприятие <small class="hint">${Object.keys(s.enterprises).length} / ${hqLimit(s, 'manage')}</small></h3>` + this.win_enterprises(s, true);
+  }
+
+  // ---------- вкладка «Специалисты» ----------
+  co_staff(s) {
+    const specs = s.specs || [];
     const ents = Object.values(s.enterprises);
-    const last = s.history[s.history.length - 1];
-    let h = `<div class="row"><b style="font-size:18px">${esc(s.company)}</b><button class="btn small" data-act="rename">✎ Переименовать</button></div>
-      <div class="kv"><span>Деньги</span><span>${fmt(s.money)}</span><span>Кредит</span><span>${fmt(s.loan)}</span>
-      <span>Капитал</span><span>${fmt(G.netWorth(s))}</span><span>Вчера: доход / расход</span><span>${fmt(last.income)} / ${fmt(last.expense)}</span></div>
-      <canvas class="chart" id="chart"></canvas><p class="hint">Синяя линия — капитал, зелёная — деньги на счету.</p>
-      <h3>Недвижимость</h3>`;
-    h += blds.length ? `<table><tr><th>Здание</th><th class="r">Состояние</th><th class="r">Доход</th><th class="r">Прибыль</th></tr>
-      ${blds.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}">${bTitle(b)}</a></td>
-        <td class="r">${b.state === 'build' ? '🏗️ ' + pct(b.progress / b.buildDays) : BUILDINGS[b.type].category === 'social' ? 'работает' : 'занято ' + pct(G.occRate(b))}</td>
-        <td class="r">${fmt(b.last.income)}</td><td class="r ${b.last.income - b.last.expense >= 0 ? 'pos' : 'neg'}">${fmt(b.last.income - b.last.expense)}</td></tr>`).join('')}</table>`
-      : '<p class="hint">Зданий пока нет — кликните по пустому участку на карте.</p>';
-    h += '<h3>Предприятия</h3>' + (ents.length ? this.entTable(ents) : '<p class="hint">Предприятий пока нет — меню «Предприятия».</p>');
+    let h = `<h3>Специалисты компании</h3>`;
+    h += specs.length ? `<table class="grid"><tr><th>Работник</th><th>Уровень</th><th class="r">Зарплата</th><th>Место работы</th><th>Профессия</th><th>Характеристики</th><th></th></tr>
+      ${specs.map(x => {
+        const opts = ents.filter(e => e.type === x.type);
+        return `<tr><td><span class="face">${x.face}</span> <b>${esc(x.name)}</b></td>
+          <td><span class="star sm">${x.level}</span> <span class="xp" title="Опыт до следующего уровня"><i style="width:${Math.round((x.xp / (x.level * 15)) * 100)}%"></i></span></td>
+          <td class="r">${fmt(specSalary(x.level))}/день</td>
+          <td><select data-act="assign" data-id="${x.id}"><option value="">— не назначен —</option>${opts.map(e => `<option value="${e.id}" ${x.job === e.id ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></td>
+          <td>${x.prof}</td><td><span title="Производительность">⚡ +${x.level * 3}%</span> · <span title="Качество продукции">✨ +${(x.level * 0.08).toFixed(2)}</span></td>
+          <td><button class="btn small danger" data-act="fire" data-id="${x.id}">Уволить</button></td></tr>`;
+      }).join('')}
+      <tr><td></td><td><b>Итого:</b></td><td class="r"><b>${fmt(specs.reduce((a, x) => a + specSalary(x.level), 0))}/день</b></td><td colspan="4"></td></tr></table>`
+      : '<p class="hint">Специалистов пока нет. Наймите их на бирже ниже — каждый ускоряет и улучшает своё предприятие.</p>';
+    h += `<h3>Биржа специалистов <small class="hint">обновляется каждые 7 дней</small></h3>
+      <table class="grid"><tr><th>Кандидат</th><th>Уровень</th><th>Профессия</th><th class="r">Зарплата</th><th class="r">Подбор</th><th></th></tr>
+      ${(s.candidates || []).map(c => `<tr><td><span class="face">${c.face}</span> ${esc(c.name)}</td><td><span class="star sm">${c.level}</span></td><td>${c.prof} <span class="hint">(${ENTERPRISES[c.type].name})</span></td>
+        <td class="r">${fmt(specSalary(c.level))}/день</td><td class="r">${fmt(P.hireFee(c))}</td>
+        <td><button class="btn small primary" data-act="hire" data-id="${c.id}" ${s.money < P.hireFee(c) ? 'disabled' : ''}>Нанять</button></td></tr>`).join('')}</table>
+      <p class="hint">Специалист работает на одном предприятии своей профессии: +3% производительности и +0,08 к качеству за уровень. Опыт растёт каждый день работы.</p>`;
+    if (ents.length) {
+      h += `<h3>Рабочие <small class="hint">${num(P.staffTotal(s))} / ${num(hqLimit(s, 'staff'))} · средняя зарплата в городе ${s.marketSalary} ₽</small></h3>
+        <table class="grid"><tr><th>Предприятие</th><th class="r">Работают</th><th class="r">Нужно</th><th>Зарплата, ₽/день</th><th class="r">Эффективность</th></tr>
+        ${ents.map(e => `<tr><td><a href="#" data-act="openent" data-id="${e.id}">${entName(e)}</a></td><td class="r">${e.workers}</td><td class="r">${e.target} / ${P.maxWorkers(e)}</td>
+          <td><input type="number" min="1" value="${e.salary}" data-act="esalary" data-id="${e.id}" style="width:80px"></td><td class="r">${pct(P.salaryEff(s, e))}</td></tr>`).join('')}</table>`;
+    }
     return h;
   }
+
+  // ---------- вкладка «Финансы» ----------
+  co_finance(s) {
+    const subs = [['accounts', 'счета'], ['credits', 'кредиты'], ['credhist', 'кредитная история'], ['weekly', 'еженедельные платежи'], ['statement', 'выписка по счетам'], ['parties', 'контрагенты компании']];
+    this.finSub ||= 'accounts';
+    let h = `<div class="sublinks">${subs.map(([k, n]) => `<a href="#" data-act="finsub" data-k="${k}" class="${this.finSub === k ? 'on' : ''}">${n}</a>`).join(' | ')}</div>`;
+    switch (this.finSub) {
+      case 'accounts':
+        h += `<table class="grid"><tr><th>Тип</th><th>Номер</th><th>Валюта</th><th class="r">Сумма</th><th class="r">Предприятий</th><th>Статус</th></tr>
+          <tr><td>Расчётный</td><td><a href="#" data-act="finsub" data-k="statement">${accountNo(s)}</a></td><td>Российский рубль</td><td class="r"><a href="#" data-act="finsub" data-k="statement">${fmt(s.money)}</a></td>
+          <td class="r">${Object.keys(s.enterprises).length + Object.values(s.buildings).filter(G.isPlayer).length}</td><td>${s.money >= 0 ? 'активен' : '<span class="neg">в минусе</span>'}</td></tr></table>`;
+        break;
+      case 'credits': h += this.win_bank(s); break;
+      case 'credhist':
+        h += (s.loanLog || []).length ? `<table class="grid"><tr><th>Игровая дата</th><th>Операция</th><th class="r">Сумма</th><th class="r">Долг после</th></tr>
+          ${s.loanLog.map(l => `<tr><td>${shortDate(l.day)}</td><td>${l.kind}</td><td class="r">${fmt(l.amount)}</td><td class="r">${fmt(l.loan)}</td></tr>`).join('')}</table>` : '<p class="hint">Кредитов ещё не было.</p>';
+        break;
+      case 'weekly': {
+        const recurring = ['salary', 'specSalary', 'upkeep', 'estate', 'tax', 'shopRent', 'interest', 'purchase', 'transport'];
+        const w = this.period(7);
+        h += `<table class="grid"><tr><th>Платёж</th><th class="r">За неделю</th><th class="r">В среднем в день</th></tr>
+          ${recurring.map(c => { const v = w.sum('exp', c); return v ? `<tr><td>${CATS[c].name}</td><td class="r">${fmt(v)}</td><td class="r">${fmt(v / Math.max(1, w.days))}</td></tr>` : ''; }).join('')}</table>`;
+        break;
+      }
+      case 'statement': h += this.statementHtml(); break;
+      case 'parties': {
+        const m = new Map();
+        for (const t of s.tx) {
+          const p = m.get(t.party) || { in: 0, out: 0, n: 0 };
+          if (t.amount > 0) p.in += t.amount; else p.out -= t.amount;
+          p.n++; m.set(t.party, p);
+        }
+        h += `<table class="grid"><tr><th>Контрагент</th><th class="r">Получено от него</th><th class="r">Заплачено ему</th><th class="r">Операций</th></tr>
+          ${[...m].sort((a, b) => b[1].in + b[1].out - a[1].in - a[1].out).map(([k, p]) => `<tr><td>${esc(k)}</td><td class="r pos">${p.in ? fmt(p.in) : '—'}</td><td class="r neg">${p.out ? fmt(p.out) : '—'}</td><td class="r">${p.n}</td></tr>`).join('')}</table>
+          <p class="hint">По последним ${s.tx.length} операциям.</p>`;
+        break;
+      }
+    }
+    return h;
+  }
+
+  statementHtml() {
+    const s = this.s, per = 25, pages = Math.max(1, Math.ceil(s.tx.length / per));
+    this.txPage = Math.min(this.txPage || 0, pages - 1);
+    const rows = s.tx.slice(this.txPage * per, this.txPage * per + per);
+    const co = esc(s.company);
+    return `<div class="acc">Счёт № ${accountNo(s)}</div><table class="grid"><tr><th>##</th><th>Игровая дата</th><th>Плательщик</th><th>Получатель</th><th>Тип</th><th class="r">Сумма</th><th class="r">Остаток по счёту</th></tr>
+      ${rows.map(t => {
+        const mineSide = t.from ? `${co} · ${esc(t.from)}` : co;
+        const [payer, payee] = t.amount < 0 ? [mineSide, esc(t.party)] : [esc(t.party), mineSide];
+        return `<tr><td>#${t.id}</td><td>${shortDate(t.day)}</td><td>${payer}</td><td>${payee}</td><td>${esc(t.type)}</td>
+          <td class="r ${t.amount < 0 ? 'neg' : ''}">${fmt(t.amount)}</td><td class="r">${fmt(t.balance)}</td></tr>`;
+      }).join('') || '<tr><td colspan="7" class="hint">Операций пока нет</td></tr>'}</table>
+      ${pages > 1 ? `<div class="pager">${Array.from({ length: Math.min(pages, 12) }, (_, n) => `<button class="${n === this.txPage ? 'on' : ''}" data-act="txpage" data-p="${n}">${n + 1}</button>`).join('')}</div>` : ''}`;
+  }
+
+  // ---------- вкладка «Отчёты» ----------
+  co_reports(s) {
+    const reps = [['income', '💲', 'Доходы, расходы'], ['assets', '🪙', 'Активы, обязательства'], ['charts', '📊', 'Графические отчёты'], ['byEnt', '🏭', 'По предприятиям'],
+      ['byInd', '🛠️', 'По отраслям'], ['goods', '📦', 'Товарооборот компании'], ['statement', '🧾', 'Выписка по счёту'], ['geo', '🗺️', 'География компании'],
+      ['eod', '📅', 'Остаток по счёту на конец дня'], ['news', '📰', 'Новости компании']];
+    this.rep ||= 'income';
+    const cur = reps.find(r => r[0] === this.rep);
+    return `<div class="repicons">${reps.map(([k, i, n]) => `<button class="${this.rep === k ? 'on' : ''}" data-act="rep" data-k="${k}" title="${n}">${i}</button>`).join('')}</div>
+      <h2 class="reptitle">${cur[2]}</h2>${this[`rep_${this.rep}`](s)}`;
+  }
+
+  // сумма статьи по истории: дни [from, to) от конца
+  histSum(side, cat, from, to) {
+    const h = this.s.history, a = Math.max(0, h.length - to), b = Math.max(0, h.length - from);
+    let v = 0;
+    for (let n = a; n < b; n++) v += cat ? h[n][side]?.[cat] || 0 : (side === 'inc' ? h[n].income : h[n].expense);
+    return v;
+  }
+
+  rep_income(s) {
+    const year = s.totals?.years?.[Math.floor((s.day - 1) / 365) + 1] || { inc: {}, exp: {} }, all = s.totals?.all || { inc: {}, exp: {} };
+    const cols = (side, cats) => {
+      const f = (fn) => cats.reduce((a, c) => a + fn(c), 0);
+      const week = f(c => this.histSum(side, c, 0, 7)), prev = f(c => this.histSum(side, c, 7, 14));
+      return { week, delta: week - prev, prev, month: f(c => this.histSum(side, c, 0, 30)), year: f(c => year[side][c] || 0), all: f(c => all[side][c] || 0) };
+    };
+    const td = (v, sign, good) => `<td class="r ${sign && v ? ((v > 0) === good ? 'pos' : 'neg') : ''}">${v ? (sign && v > 0 ? '+' : '') + num(v) : '—'}</td>`;
+    const row = (title, side, cats, cls = '', mult = 1) => {
+      const c = cols(side, cats);
+      const k = mult;
+      return `<tr class="${cls}"><td>${title}</td>${td(c.week * k)}${td(c.delta * k, true, side === 'inc' ? k > 0 : k < 0)}${td(c.prev * k)}${td(c.month * k)}${td(c.year * k)}${td(c.all * k)}</tr>`;
+    };
+    const net = (title, parts, cls) => {
+      const sums = parts.map(([side, cats, k]) => { const c = cols(side, cats); return Object.fromEntries(Object.entries(c).map(([n, v]) => [n, v * k])); });
+      const t = Object.fromEntries(Object.keys(sums[0]).map(n => [n, sums.reduce((a, x) => a + x[n], 0)]));
+      return `<tr class="${cls}"><td>${title}</td>${td(t.week)}${td(t.delta, true, true)}${td(t.prev)}${td(t.month)}${td(t.year)}${td(t.all)}</tr>`;
+    };
+    const ids = (side, group) => Object.keys(CATS).filter(c => CATS[c].side === side && CATS[c].group === group);
+    const block = (title, side, group) => row(title, side, ids(side, group), 'sec') + ids(side, group).map(c => row(CATS[c].name, side, [c], 'sub')).join('');
+    return `<table class="grid rep"><tr><th>Название статьи</th><th class="r">Неделя</th><th class="r"></th><th class="r">Предыдущая</th><th class="r">Месяц</th><th class="r">Год</th><th class="r">Всего</th></tr>
+      ${block('Доходы', 'inc', 'op')}${block('Операционные расходы', 'exp', 'op')}
+      ${net('Прибыль от операционной деятельности', [['inc', ids('inc', 'op'), 1], ['exp', ids('exp', 'op'), -1]], 'tot')}
+      ${block('Инвестиционные доходы', 'inc', 'inv')}${block('Инвестиционные расходы', 'exp', 'inv')}
+      ${net('Инвестиции', [['inc', ids('inc', 'inv'), 1], ['exp', ids('exp', 'inv'), -1]], 'tot')}
+      ${block('Финансовые доходы', 'inc', 'fin')}${block('Финансовые расходы', 'exp', 'fin')}
+      ${net('Денежный поток от финансовых операций', [['inc', ids('inc', 'fin'), 1], ['exp', ids('exp', 'fin'), -1]], 'tot')}
+      ${net('Чистая прибыль', [['inc', ids('inc', 'op'), 1], ['exp', [...ids('exp', 'op'), 'interest'], -1]], 'total')}
+      ${net('Изменение денег на счету', [['inc', Object.keys(CATS).filter(c => CATS[c].side === 'inc'), 1], ['exp', Object.keys(CATS).filter(c => CATS[c].side === 'exp'), -1]], 'tot')}</table>`;
+  }
+
+  rep_assets(s) {
+    const h = s.history, now = G.assets(s), wk = h[h.length - 8]?.assets, mo = h[h.length - 31]?.assets;
+    const rows = [['Материальные активы', ['buildings', 'wip', 'equipment', 'stock', 'hq'], 'sec'], ['Здания, сооружения', ['buildings'], 'sub'], ['Незавершённое строительство', ['wip'], 'sub'],
+      ['Оборудование предприятий', ['equipment'], 'sub'], ['Сырьё, товары', ['stock'], 'sub'], ['Штаб-квартира', ['hq'], 'sub'],
+      ['Финансовые активы', ['cash'], 'sec'], ['Денежные средства', ['cash'], 'sub'],
+      ['Всего активов', ['buildings', 'wip', 'equipment', 'stock', 'hq', 'cash'], 'tot'],
+      ['Обязательства', ['loan'], 'sec'], ['Обязательства по кредитам', ['loan'], 'sub'], ['Всего обязательств', ['loan'], 'tot']];
+    const v = (a, keys) => (a ? keys.reduce((x, k) => x + (a[k] || 0), 0) : null);
+    const td = (x, d) => `<td class="r ${d && x ? (x > 0 ? 'pos' : 'neg') : ''}">${x == null ? '—' : x ? (d && x > 0 ? '+' : '') + num(x) : '—'}</td>`;
+    const line = (t, keys, cls, k = 1) => { const a = v(now, keys) * k, b = wk ? v(wk, keys) * k : null; return `<tr class="${cls}"><td>${t}</td>${td(a)}${td(b == null ? null : a - b, true)}${td(b)}${td(mo ? v(mo, keys) * k : null)}</tr>`; };
+    const netKeys = ['buildings', 'wip', 'equipment', 'stock', 'hq', 'cash'];
+    const netRow = (() => { const f = a => (a ? v(a, netKeys) - a.loan : null), a = f(now), b = f(wk); return `<tr class="total"><td>Чистые активы</td>${td(a)}${td(b == null ? null : a - b, true)}${td(b)}${td(f(mo))}</tr>`; })();
+    return `<table class="grid rep"><tr><th>Название статьи</th><th class="r">Сейчас</th><th class="r">За неделю</th><th class="r">Неделю назад</th><th class="r">Месяц назад</th></tr>
+      ${rows.map(([t, k, c]) => line(t, k, c)).join('')}${netRow}</table>`;
+  }
+
+  rep_charts() {
+    return `<div class="charts"><figure><canvas id="ch1"></canvas><figcaption><i style="background:#4ade80"></i>доходы <i style="background:#818cf8"></i>расходы <i style="background:#f87171"></i>прибыль</figcaption></figure>
+      <figure><canvas id="ch2"></canvas><figcaption><i style="background:#4ade80"></i>активы <i style="background:#818cf8"></i>долги <i style="background:#f87171"></i>чистые активы</figcaption></figure>
+      <figure><canvas id="ch3"></canvas><figcaption>Расходы за неделю</figcaption></figure><figure><canvas id="ch4"></canvas><figcaption>Активы</figcaption></figure></div>
+      <div id="pieLegend" class="hint"></div>`;
+  }
+
+  rep_byEnt(s) {
+    const rows = this.companyUnits();
+    const hqCost = this.histSum('exp', 'hq', 0, 7);
+    return `<table class="grid"><tr><th>Город</th><th>Предприятие</th><th class="r">Выручка</th><th class="r">Затраты</th><th class="r">Прибыль</th><th class="r">Активы</th><th class="r">Долги</th></tr>
+      ${rows.map(r => `<tr><td>🏙️ ${esc(s.cityName)}</td><td><span class="star sm">${r.level}</span> <span class="ico">${r.icon}</span> <a href="#" ${r.link}>${r.name}</a></td>
+        <td class="r">${fmt(r.rev)}</td><td class="r">${fmt(r.exp)}</td><td class="r ${r.rev - r.exp < 0 ? 'neg' : ''}">${fmt(r.rev - r.exp)}</td><td class="r">${fmt(r.assets)}</td><td class="r">—</td></tr>`).join('')}
+      <tr><td>🏙️ ${esc(s.cityName)}</td><td><span class="star sm">${Math.max(...Object.values(s.hq))}</span> <span class="ico">🏛️</span> Штаб-квартира</td><td class="r">${fmt(0)}</td><td class="r">${fmt(hqCost)}</td>
+        <td class="r ${hqCost ? 'neg' : ''}">${fmt(-hqCost)}</td><td class="r">${fmt(G.assets(s).hq)}</td><td class="r">—</td></tr></table>
+      <p class="hint">Выручка и затраты — за последние 7 дней.</p>`;
+  }
+
+  rep_byInd(s) {
+    const m = new Map();
+    for (const r of this.companyUnits()) {
+      const x = m.get(r.key) || { icon: r.icon, kind: r.kind, n: 0, rev: 0, exp: 0, assets: 0 };
+      x.n++; x.rev += r.rev; x.exp += r.exp; x.assets += r.assets; m.set(r.key, x);
+    }
+    return `<table class="grid"><tr><th>Тип предприятий</th><th class="r">Выручка</th><th class="r">Затраты</th><th class="r">Прибыль</th><th class="r">Активы</th></tr>
+      ${[...m.values()].sort((a, b) => b.assets - a.assets).map(x => `<tr><td><span class="ico">${x.icon}</span> ${x.kind} <span class="hint">(${x.n})</span></td><td class="r">${fmt(x.rev)}</td><td class="r">${fmt(x.exp)}</td>
+        <td class="r ${x.rev - x.exp < 0 ? 'neg' : ''}">${fmt(x.rev - x.exp)}</td><td class="r">${fmt(x.assets)}</td></tr>`).join('') || '<tr><td colspan="5" class="hint">Пусто</td></tr>'}</table>`;
+  }
+
+  rep_goods(s) {
+    const groups = goodGroups();
+    this.goodsGroup ||= Object.keys(groups)[0];
+    const h = s.history.slice(-7), sumF = (g, f) => h.reduce((a, d) => a + (d.flow?.[g]?.[f] || 0), 0);
+    const stock = g => Object.values(s.enterprises).reduce((a, e) => a + P.stockQty(e, g), 0);
+    return `<div class="goodsrep"><div class="gside">${Object.keys(groups).map(k => `<a href="#" data-act="ggroup" data-k="${k}" class="${this.goodsGroup === k ? 'on' : ''}">${k}</a>`).join('')}</div>
+      <table class="grid"><tr><th rowspan="2">Продукт</th><th rowspan="2" class="r">Запасы</th><th colspan="2" class="c">Приход</th><th colspan="3" class="c">Расход</th><th rowspan="2" class="r">Общий баланс</th></tr>
+      <tr><th class="r">Куплено</th><th class="r">Произведено</th><th class="r">Потреблено</th><th class="r">Продано оптом</th><th class="r">Продано в розницу</th></tr>
+      ${groups[this.goodsGroup].map(g => {
+        const b = sumF(g, 'bought'), m = sumF(g, 'made'), u = sumF(g, 'used'), w = sumF(g, 'whole'), r = sumF(g, 'retail'), bal = b + m - u - w - r;
+        return `<tr><td>${goodName(g)}</td><td class="r">${num(stock(g))}</td><td class="r">${num(b)}</td><td class="r">${num(m)}</td><td class="r">${num(u)}</td><td class="r">${num(w)}</td><td class="r">${num(r)}</td>
+          <td class="r ${bal > 0 ? 'pos' : bal < 0 ? 'neg' : ''}">${bal > 0 ? '+' : ''}${num(bal)}</td></tr>`;
+      }).join('')}</table></div><p class="hint">За последние 7 дней. Перевозки между своими предприятиями не учитываются.</p>`;
+  }
+
+  rep_statement() { return this.statementHtml(); }
+
+  rep_geo(s) {
+    const a = G.assets(s), total = Object.entries(a).filter(([k]) => k !== 'loan').reduce((x, [, v]) => x + v, 0);
+    const rev = this.histSum('inc', null, 0, 7), exp = this.histSum('exp', null, 0, 7);
+    return `<div class="twocol"><div><h3>Финансы</h3><table class="grid"><tr><th>Город</th><th class="r">Активы</th><th class="r">Выручка (7 дн.)</th><th class="r">Прибыль</th></tr>
+      <tr><td>🏙️ ${esc(s.cityName)}</td><td class="r">${fmt(total)} <small class="hint">100%</small></td><td class="r">${fmt(rev)} <small class="hint">100%</small></td><td class="r">${fmt(rev - exp)}</td></tr></table></div>
+      <div><h3>Рабочие</h3><table class="grid"><tr><th>Город</th><th class="r">Доля</th><th class="r">Рабочие</th></tr>
+      <tr><td>🏙️ ${esc(s.cityName)}</td><td class="r">100%</td><td class="r">${num(P.staffTotal(s) + (s.specs || []).length)}</td></tr></table></div></div>
+      <p class="hint">Сейчас компания работает в одном городе. Другие города появятся вместе с картой мира.</p>`;
+  }
+
+  rep_eod(s) {
+    const h = s.history.slice(-60);
+    return `<div class="acc">Счёт № ${accountNo(s)}</div><table class="grid" style="max-width:520px"><tr><th>Игровая дата</th><th class="r">Изменение</th><th class="r">Остаток по счёту</th></tr>
+      ${h.map((d, n) => ({ d, ch: n ? d.money - h[n - 1].money : null })).reverse().map(({ d, ch }) => `<tr><td>${shortDate(d.day - 1)}</td>
+        <td class="r ${ch < 0 ? 'neg' : ''}">${ch == null ? '—' : fmt(ch)}</td><td class="r">${fmt(d.money)}</td></tr>`).join('')}</table>`;
+  }
+
+  rep_news(s) {
+    return `<div class="news-list">${s.news.map(n => `<div><b>${shortDate(n.day)}</b>${esc(n.text)}</div>`).join('')}</div>`;
+  }
+
+  // графики для «Графических отчётов»
+  drawReportCharts() {
+    const s = this.s, h = s.history.slice(-60);
+    const line = (id, series, bars) => {
+      const c = $(id); if (!c) return;
+      const { x, W, H } = canvas2d(c);
+      x.fillStyle = '#eef0f3'; x.fillRect(0, 0, W, H);
+      if (h.length < 2) return;
+      const all = series.flatMap(([f]) => h.map(f)).concat(bars ? h.map(bars) : []);
+      const hi = Math.max(1, ...all), lo = Math.min(0, ...all);
+      const X = n => 4 + (n / (h.length - 1)) * (W - 8), Y = v => H - 6 - ((v - lo) / (hi - lo)) * (H - 14);
+      for (const [f, col, fill] of series) {
+        x.beginPath(); h.forEach((d, n) => (n ? x.lineTo(X(n), Y(f(d))) : x.moveTo(X(n), Y(f(d)))));
+        if (fill) { x.lineTo(X(h.length - 1), Y(0)); x.lineTo(X(0), Y(0)); x.closePath(); x.fillStyle = col; x.globalAlpha = 0.55; x.fill(); x.globalAlpha = 1; }
+        else { x.strokeStyle = col; x.lineWidth = 2; x.stroke(); }
+      }
+      if (bars) { x.fillStyle = '#f87171'; h.forEach((d, n) => { const v = bars(d); x.fillRect(X(n) - 1.5, Math.min(Y(0), Y(v)), 3, Math.abs(Y(v) - Y(0))); }); }
+    };
+    line('#ch1', [[d => d.expense, '#818cf8', true], [d => d.income, '#4ade80', false]], d => d.income - d.expense);
+    const net = d => (d.assets ? Object.entries(d.assets).filter(([k]) => k !== 'loan').reduce((a, [, v]) => a + v, 0) : d.worth);
+    line('#ch2', [[net, '#4ade80', true], [d => d.assets?.loan || 0, '#818cf8', true]], d => net(d) - (d.assets?.loan || 0));
+    const pie = (id, parts) => {
+      const c = $(id); if (!c) return;
+      const { x, W, H } = canvas2d(c);
+      const tot = parts.reduce((a, p) => a + p[1], 0);
+      if (!tot) { x.fillStyle = '#6b7280'; x.fillText('Нет данных', 10, 20); return; }
+      const cx = W / 2, cy = H / 2 - 6, rx = Math.min(W, H * 1.8) / 2 - 6, ry = rx * 0.45, depth = 16;
+      const colors = ['#2563eb', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#84cc16', '#f97316', '#64748b', '#ec4899'];
+      for (let d = depth; d >= 0; d -= 2) {
+        let a = -Math.PI / 2;
+        parts.forEach(([, v], n) => {
+          const a2 = a + (v / tot) * Math.PI * 2;
+          x.beginPath(); x.moveTo(cx, cy + d); x.ellipse(cx, cy + d, rx, ry, 0, a, a2); x.closePath();
+          x.fillStyle = colors[n % colors.length]; x.globalAlpha = d ? 0.6 : 0.95; x.fill();
+          a = a2;
+        });
+      }
+      x.globalAlpha = 1;
+      return colors;
+    };
+    const w = this.period(7), exps = Object.keys(CATS).filter(k => CATS[k].side === 'exp').map(k => [CATS[k].name, w.sum('exp', k)]).filter(p => p[1] > 0);
+    const a = G.assets(s), names = { buildings: 'Здания', wip: 'Стройки', equipment: 'Оборудование', stock: 'Товары', hq: 'Штаб-квартира', cash: 'Деньги' };
+    const ass = Object.keys(names).map(k => [names[k], a[k]]).filter(p => p[1] > 0);
+    const colors = pie('#ch3', exps); pie('#ch4', ass);
+    const leg = (parts) => parts.map(([n, v], i) => `<span class="lg"><i style="background:${(colors || [])[i % 10]}"></i>${n} — ${fmtShort(v)}</span>`).join(' ');
+    if ($('#pieLegend')) $('#pieLegend').innerHTML = `<p><b>Расходы:</b> ${leg(exps)}</p><p><b>Активы:</b> ${leg(ass)}</p>`;
+  }
+
+  // ---------- страница города (как «Город Ташкент» в Бизмании) ----------
+  page_city(s) {
+    this.cityTab ||= 'map';
+    const tabs = [['info', 'Город'], ['map', 'Карта'], ['projects', 'Проекты'], ['ents', 'Предприятия'], ['analytics', 'Аналитика']];
+    const level = Math.min(5, 1 + Math.floor((s.city.population || 0) / 2000));
+    return `<div class="page-title"><span class="big">🏙️</span><h1>Город ${esc(s.cityName)}</h1>
+        <div class="acts mayor"><div><span>❔</span><small>Мэр<br>нет мэра</small></div><div><span>❔</span><small>Зам<br>нет зама</small></div>
+        <span class="star" title="Уровень города">${level}</span></div></div>
+      <div class="ftabs">${tabs.map(([k, n]) => `<button data-act="citytab" data-k="${k}" class="${this.cityTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+      ${this[`city_${this.cityTab}`](s)}`;
+  }
+
+  city_map() {
+    const c = this.app.world.coverage || {};
+    return `<div class="mapframe" id="mapSlot"></div>
+      <p class="hint">Клик по участку — информация и стройка. Мышь: левая кнопка — двигать, правая — вращать, колесо — масштаб.
+        Круги показывают зоны охвата: зелёные — ваши здания, красные — конкурентов.</p>
+      <label class="chk"><input type="checkbox" data-act="cover" data-k="hospital" ${c.hospital ? 'checked' : ''}> 🏥 Больница</label>
+      <label class="chk"><input type="checkbox" data-act="cover" data-k="police" ${c.police ? 'checked' : ''}> 🚓 Полиция</label>`;
+  }
+
+  city_info(s) {
+    const all = Object.values(s.buildings), done = all.filter(b => b.state === 'done');
+    const mine = all.filter(G.isPlayer).length;
+    const plots = Object.keys(s.plots).length;
+    const count = t => done.filter(b => b.type === t).length;
+    return `<div class="twocol"><div class="kv">
+        <span>Население</span><span>${num(s.city.population || 0)} чел.</span><span>Семей в квартирах</span><span>${num(s.city.households || 0)}</span>
+        <span>Рабочих мест</span><span>${num(s.city.jobs || 0)}</span><span>Средняя зарплата</span><span>${s.marketSalary} ₽/день</span>
+        <span>Застроено участков</span><span>${all.length} из ${plots}</span><span>Ваших зданий</span><span>${mine}</span>
+        <span>Больниц / полиции</span><span>${count('hospital')} / ${count('police')}</span></div>
+      <div><h3>Компании города</h3>${this.win_rating(s)}</div></div>`;
+  }
+
+  city_projects(s) {
+    const list = Object.values(s.buildings).filter(b => b.state === 'build');
+    return list.length ? `<table class="grid"><tr><th>Объект</th><th>Заказчик</th><th>Подрядчик</th><th class="r">Готовность</th><th class="r">Осталось</th></tr>
+      ${list.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}">${bTitle(b)}</a> · ${b.floors} эт.</td><td style="color:${ownerColor(b)}">${ownerName(s, b)}</td>
+        <td>${contractorInfo(b.contractor).name}</td><td class="r">${pct(b.progress / b.buildDays)}</td><td class="r">~${Math.ceil(b.buildDays - b.progress)} дн.</td></tr>`).join('')}</table>`
+      : '<p class="hint">Сейчас в городе ничего не строится.</p>';
+  }
+
+  city_ents(s) {
+    const list = Object.values(s.buildings).filter(b => b.state === 'done');
+    return list.length ? `<table class="grid"><tr><th>Здание</th><th>Владелец</th><th class="r">Этажей</th><th class="r">Заполненность</th><th>Район</th></tr>
+      ${list.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}">${bTitle(b)}</a></td><td style="color:${ownerColor(b)}">${ownerName(s, b)}</td>
+        <td class="r">${b.floors}</td><td class="r">${BUILDINGS[b.type].category === 'social' ? '—' : pct(G.occRate(b))}</td><td>${s.plots[G.key(b.i, b.j)].loc.toFixed(2)}</td></tr>`).join('')}</table>`
+      : '<p class="hint">В городе пока нет готовых зданий.</p>';
+  }
+
+  city_analytics(s) {
+    const keep = this.winTab;
+    this.winTab = 'estate';
+    const h = this.win_market(s).replace(/<div class="tabs">[\s\S]*?<\/div>/, '');
+    this.winTab = keep;
+    return h;
+  }
+
+  page_builds(s) {
+    const blds = Object.values(s.buildings).filter(b => G.isPlayer(b) && b.state === 'build');
+    return `<div class="page-title"><span class="big">🏗️</span><h1>Стройки</h1><div class="acts"><button class="btn primary" data-act="tocity">🌐 Выбрать участок в городе</button></div></div>
+      <div class="kv" style="max-width:480px"><span>Строек сейчас</span><span>${blds.length} / ${hqLimit(s, 'build')}</span>
+      <span>Своих строительных компаний</span><span>${G.builders(s).length}</span></div>
+      ${blds.length ? `<table><tr><th>Здание</th><th>Строит</th><th class="r">Готовность</th><th class="r">Осталось</th><th>Статус</th></tr>
+      ${blds.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}">${bTitle(b)}</a> · ${b.floors} эт.</td><td>${contractorInfo(b.contractor).name}</td>
+        <td class="r">${pct(b.progress / b.buildDays)}</td><td class="r">~${Math.ceil(b.buildDays - b.progress)} дн.</td>
+        <td>${b.paused ? '<span class="warn">⛔ стоит</span>' : b.delayed ? 'простой' : 'идёт'}</td></tr>`).join('')}</table>`
+      : '<p class="hint">Строек нет. Откройте город, кликните по свободному участку и выберите, что и кто строит.</p>'}
+      <h3>Подрядчики</h3><table><tr><th>Компания</th><th class="r">Цена</th><th class="r">Срок</th><th>Качество</th><th></th></tr>
+      ${Object.values(CONTRACTORS).map(c => `<tr><td><b style="color:${c.color}">${c.name}</b></td><td class="r">×${c.price}</td><td class="r">×${c.speed}</td><td class="stars">${stars(c.quality)}</td><td class="hint">${c.desc}</td></tr>`).join('')}
+      <tr><td><b style="color:${OWN.color}">${OWN.name}</b></td><td class="r">материалы</td><td class="r">бригада</td><td class="stars">${stars(OWN.quality)}</td><td class="hint">${OWN.desc}</td></tr></table>`;
+  }
+
+  page_settings(s) {
+    const st = this.app.settings;
+    return `<div class="page-title"><span class="big">⚙️</span><h1>Настройки</h1></div>
+      <div class="box" style="max-width:640px"><h4>Сервер</h4><div class="kv">
+        <span>Длина игрового дня</span><span><b>${st.dayLengthSeconds} сек.</b></span>
+        <span>Источник</span><span>${st.fromServer ? 'настройки сервера (settings.json)' : 'по умолчанию — файл настроек не найден'}</span></div>
+        <p class="hint">Длина дня задаётся на сервере: в окне программы BizCity.exe или в файле <code>bizgame/settings.json</code>
+        (<code>{"dayLengthSeconds": 60}</code>). Игра подхватывает изменения сама в течение 20 секунд.
+        Кнопки ⏩ внизу ускоряют время только у вас.</p></div>
+      <div class="box" style="max-width:640px"><h4>Компания и город</h4>
+        <div class="row"><button class="btn" data-act="rename">✎ Название компании</button><button class="btn" data-act="renamecity">✎ Название города</button></div></div>
+      <div class="box" style="max-width:640px"><h4>Прогресс</h4><p class="hint">Сброс удалит сохранение и начнёт игру с пустого города.</p>
+        <button class="btn danger" data-act="reset">🔄 Сбросить прогресс</button></div>`;
+  }
+
+  page_market(s) { return this.titled('market'); }
+  page_contracts(s) { return this.titled('contracts'); }
+  page_rating(s) { return this.titled('rating'); }
+  page_quests(s) { return this.titled('quests'); }
+  page_help(s) { return this.titled('help'); }
 
   entTable(ents) {
     return `<table><tr><th>Предприятие</th><th>Что делает</th><th class="r">Штат</th><th class="r">Прибыль</th></tr>
@@ -589,9 +1141,9 @@ export class UI {
       }).join('')}</table>`;
   }
 
-  win_enterprises(s) {
+  win_enterprises(s, cardsOnly = false) {
     const ents = Object.values(s.enterprises);
-    let h = ents.length ? this.entTable(ents) : '<p class="hint">У вас пока нет предприятий.</p>';
+    let h = cardsOnly ? '' : ents.length ? this.entTable(ents) : '<p class="hint">У вас пока нет предприятий.</p>';
     const hosts = P.shopHosts(s);
     h += `<h3>Создать предприятие</h3><p class="hint">Фермы, карьеры, заводы, склады, НИИ и строительная компания работают виртуально — участок в городе им не нужен.
       Магазин открывается в коммерческом помещении жилого дома.</p><div class="cards">`;
@@ -658,25 +1210,33 @@ export class UI {
     return h;
   }
 
+  // График как в Бизмании: заливка — активы, зелёная линия — выручка, столбики — прибыль/убыток за день
   drawChart() {
     const c = $('#chart'); if (!c) return;
     const s = this.s, dpr = devicePixelRatio || 1;
     c.width = c.clientWidth * dpr; c.height = c.clientHeight * dpr;
     const x = c.getContext('2d'); x.scale(dpr, dpr);
-    const W = c.clientWidth, H = c.clientHeight, pad = 8, h = s.history;
-    if (h.length < 2) { x.fillStyle = '#94a3b8'; x.fillText('Данные появятся через пару дней', 10, 20); return; }
-    const vals = h.flatMap(p => [p.worth, p.money]);
-    const lo = Math.min(0, ...vals), hi = Math.max(...vals) * 1.05;
-    const X = n => pad + (n / (h.length - 1)) * (W - pad * 2), Y = v => H - pad - ((v - lo) / (hi - lo || 1)) * (H - pad * 2);
-    x.strokeStyle = 'rgba(148,163,184,.2)';
-    x.beginPath(); x.moveTo(pad, Y(0)); x.lineTo(W - pad, Y(0)); x.stroke();
-    for (const [k, col] of [['worth', '#3b82f6'], ['money', '#22c55e']]) {
-      x.strokeStyle = col; x.lineWidth = 2.5; x.beginPath();
-      h.forEach((p, n) => (n ? x.lineTo(X(n), Y(p[k])) : x.moveTo(X(n), Y(p[k]))));
-      x.stroke();
-    }
-    x.fillStyle = '#94a3b8'; x.font = '12px system-ui';
-    x.fillText(fmt(hi), pad + 2, 14); x.fillText(`день ${h[0].day}–${h[h.length - 1].day}`, W - 110, H - 12);
+    const W = c.clientWidth, H = c.clientHeight, h = s.history.slice(-60);
+    if (h.length < 2) { x.fillStyle = '#6b7280'; x.font = '12px system-ui'; x.fillText('График появится через пару дней', 10, 20); return; }
+    const X = n => 4 + (n / (h.length - 1)) * (W - 8);
+    const hiW = Math.max(...h.map(p => p.worth), 1), base = H - 18;
+    const Yw = v => base - (Math.max(0, v) / hiW) * (H - 30);
+    const grad = x.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#6d6ee8'); grad.addColorStop(1, '#b9bdf3');
+    x.fillStyle = grad; x.beginPath(); x.moveTo(X(0), base);
+    h.forEach((p, n) => x.lineTo(X(n), Yw(p.worth)));
+    x.lineTo(X(h.length - 1), base); x.closePath(); x.fill();
+    const hiI = Math.max(...h.map(p => Math.max(p.income, p.expense)), 1);
+    const Yi = v => base - (v / hiI) * (H - 40) * 0.6;
+    x.fillStyle = 'rgba(220,38,38,.75)';
+    h.forEach((p, n) => { const pr = p.income - p.expense; if (pr < 0) x.fillRect(X(n) - 1.5, base, 3, Math.min(16, (-pr / hiI) * 30)); });
+    x.strokeStyle = '#4ade80'; x.lineWidth = 2; x.beginPath();
+    h.forEach((p, n) => (n ? x.lineTo(X(n), Yi(p.income)) : x.moveTo(X(n), Yi(p.income))));
+    x.stroke();
+    x.fillStyle = '#4ade80';
+    h.forEach((p, n) => { x.beginPath(); x.arc(X(n), Yi(p.income), 1.8, 0, 7); x.fill(); });
+    x.fillStyle = '#374151'; x.font = '11px system-ui';
+    x.fillText(fmtShort(hiW), 6, 12);
   }
 
   win_rating(s) {
@@ -703,7 +1263,7 @@ export class UI {
   win_help() {
     return `<div class="help">
       <h3>Цель</h3><p>Застроить пустой город, построить производственную империю и обогнать конкурентов в рейтинге.</p>
-      <h3>Управление</h3><p>Мышь: левая кнопка — двигать карту, правая — вращать, колесо — масштаб. Телефон: один палец — двигать, два — масштаб и поворот. Пробел — пауза.</p>
+      <h3>Управление</h3><p>Разделы — иконки вверху: 🌐 город (3D-карта), 🏢 компания, 🏭 предприятия, 🧑‍💼 специалисты, 🏗️ стройки, 💲 финансы, 📋 отчёты. На карте: левая кнопка мыши — двигать, правая — вращать, колесо — масштаб; на телефоне — один палец двигает, два — масштаб и поворот. Пробел — пауза, ⏩ — ускорить время.</p><h3>Время</h3><p>Игровой день длится минуту (настраивается на сервере). До нового дня — в шапке. Каждый день начисляются аренда, зарплаты, идут стройки и производство.</p><h3>Штаб-квартира и специалисты</h3><p>Отделы штаб-квартиры ограничивают число рабочих, предприятий, продуктов и строек — повышайте их уровень. Специалисты с биржи ускоряют предприятие своей профессии и повышают качество.</p>
       <h3>Здания в городе</h3><p>Кликните по пустому участку и закажите стройку. Три типа зданий:<br>
       🏢 <b>офисные</b> — офисы сдаются компаниям;<br>🏘️ <b>жилые</b> — квартиры для горожан, на первом этаже — коммерческие помещения (магазины, кафе);<br>
       🏥🚓 <b>социальные</b> — больница и полиция: город платит за содержание, а дома вокруг становятся привлекательнее.</p>

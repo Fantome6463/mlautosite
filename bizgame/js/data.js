@@ -37,10 +37,6 @@ export const RECIPES = {
   oil:        { ent: 'mine',     rate: 180, inputs: {} },
   stone:      { ent: 'mine',     rate: 300, inputs: {} },
   sand:       { ent: 'mine',     rate: 360, inputs: {} },
-  cement:     { ent: 'factory',  rate: 150, inputs: { stone: 2 } },
-  concrete:   { ent: 'factory',  rate: 240, inputs: { cement: 0.5, sand: 1 } },
-  bricks:     { ent: 'factory',  rate: 200, inputs: { stone: 1, sand: 0.5 } },
-  glass:      { ent: 'factory',  rate: 120, inputs: { sand: 2 } },
   flour:      { ent: 'factory',  rate: 180, inputs: { grain: 2 } },
   bread:      { ent: 'factory',  rate: 180, inputs: { flour: 1 } },
   cheese:     { ent: 'factory',  rate: 75,  inputs: { milk: 3 } },
@@ -52,6 +48,10 @@ export const RECIPES = {
   clothes:    { ent: 'factory',  rate: 68,  inputs: { fabric: 2 } },
   appliances: { ent: 'factory',  rate: 22,  inputs: { steel: 2, plastic: 2 } },
   toys:       { ent: 'factory',  rate: 90,  inputs: { plastic: 0.5, fabric: 0.5 } },
+  cement:     { ent: 'factory',  rate: 150, inputs: { stone: 2 } },
+  concrete:   { ent: 'factory',  rate: 240, inputs: { cement: 0.5, sand: 1 } },
+  bricks:     { ent: 'factory',  rate: 200, inputs: { stone: 1, sand: 0.5 } },
+  glass:      { ent: 'factory',  rate: 120, inputs: { sand: 2 } },
 };
 
 export const ENTERPRISES = {
@@ -137,6 +137,17 @@ export const ADVANCE = 0.2; // аванс подрядчику при заказ
 
 export const START_MONEY = 250000;
 
+// Штаб-квартира: отделы задают лимиты компании, уровень повышается за деньги.
+export const HQ = {
+  staff:  { name: 'Отдел персонала',        label: 'Сотрудников',            limit: l => 250 * 2 ** (l - 1) },
+  manage: { name: 'Управляющий отдел',      label: 'Предприятий',            limit: l => 6 + 3 * (l - 1) },
+  prod:   { name: 'Производственный отдел', label: 'Производимые продукты',  limit: l => 4 + 2 * (l - 1) },
+  build:  { name: 'Строительный отдел',     label: 'Одновременных строек',   limit: l => 2 + (l - 1) },
+};
+export const HQ_MAX = 10;
+export const hqLimit = (s, k) => HQ[k].limit(s.hq?.[k] || 1);
+export const hqUpgradeCost = l => 25000 * l * l;
+
 // Город: сетка GRID×GRID, дороги на каждой 4-й линии.
 export const GRID = 17;
 export const isRoad = (i, j) => i % 4 === 0 || j % 4 === 0;
@@ -149,6 +160,20 @@ export const RIVALS = [
 ];
 
 export const PLAYER_COLOR = '#3b82f6';
+
+// Специалисты: у каждого вида предприятий — своя профессия
+export const PROFESSIONS = {
+  farm: 'Агроном', forestry: 'Лесничий', mine: 'Горный мастер', factory: 'Начальник цеха',
+  warehouse: 'Кладовщик', lab: 'Учёный', shop: 'Продавец', construction: 'Прораб',
+};
+export const SPEC_NAMES = {
+  m: ['Николай Крутов', 'Илья Федотов', 'Георгий Трубленков', 'Вячеслав Краснов', 'Андрей Соколов', 'Павел Орлов', 'Дмитрий Зайцев',
+    'Сергей Белов', 'Олег Миронов', 'Тимур Каримов', 'Артём Волков', 'Роман Кузнецов', 'Максим Лебедев', 'Игорь Гусев'],
+  f: ['Анна Смирнова', 'Мария Иванова', 'Елена Попова', 'Ольга Васнецова', 'Дарья Морозова', 'Светлана Новикова', 'Ирина Козлова',
+    'Наталья Егорова', 'Алина Сафина', 'Ксения Павлова'],
+};
+export const SPEC_FACES = { m: ['👨', '🧔', '👱‍♂️', '👨‍🦰', '👴', '👨‍🦱'], f: ['👩', '👩‍🦰', '👱‍♀️', '👩‍🦱', '👵'] };
+export const specSalary = level => 15 * level * level;
 
 export const EVENTS = [
   { key: 'apt',    mult: 1.35, text: 'Приток переселенцев: спрос на жильё вырос' },

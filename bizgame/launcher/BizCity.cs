@@ -100,6 +100,8 @@ class GameServer
             string full = Path.GetFullPath(Path.Combine(root, path.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
             if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) { Send(ns, 403, "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Forbidden"), method == "GET"); return; }
             if (Directory.Exists(full)) { Redirect(ns, path + "/"); return; }
+            // настройки сервера: если файла ещё нет — отдаём значения по умолчанию
+            if (path == "/settings.json" && !File.Exists(full)) { Send(ns, 200, Mime[".json"], Encoding.UTF8.GetBytes(ServerSettings.Json(ServerSettings.DefaultDay)), method == "GET"); return; }
             if (!File.Exists(full)) { Send(ns, 404, "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Not found: " + path), method == "GET"); return; }
 
             string type;
@@ -159,6 +161,31 @@ class GameServer
     }
 }
 
+// Настройки сервера в bizgame/settings.json — игра перечитывает их каждые 20 секунд.
+static class ServerSettings
+{
+    public const int DefaultDay = 60;
+    public static string Path(string dir) { return System.IO.Path.Combine(dir, "settings.json"); }
+    public static string Json(int daySeconds) { return "{\n  \"dayLengthSeconds\": " + daySeconds + "\n}\n"; }
+
+    public static int ReadDay(string dir)
+    {
+        try
+        {
+            string text = File.ReadAllText(Path(dir));
+            var m = System.Text.RegularExpressions.Regex.Match(text, "\"dayLengthSeconds\"\\s*:\\s*(\\d+)");
+            if (m.Success) return Math.Max(5, int.Parse(m.Groups[1].Value));
+        }
+        catch { }
+        return DefaultDay;
+    }
+
+    public static void WriteDay(string dir, int seconds)
+    {
+        File.WriteAllText(Path(dir), Json(seconds), new UTF8Encoding(false));
+    }
+}
+
 class MainForm : Form
 {
     readonly GameServer server;
@@ -166,6 +193,7 @@ class MainForm : Form
     readonly Label status = new Label();
     readonly CheckBox lanBox = new CheckBox();
     readonly TextBox lanText = new TextBox();
+    readonly NumericUpDown dayBox = new NumericUpDown();
     readonly NotifyIcon tray = new NotifyIcon();
     bool trayHintShown;
 
@@ -178,7 +206,7 @@ class MainForm : Form
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(460, 300);
+        ClientSize = new Size(460, 340);
         BackColor = Color.FromArgb(15, 23, 42);
         ForeColor = Color.FromArgb(226, 232, 240);
         try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
@@ -217,7 +245,21 @@ class MainForm : Form
 
         Label hint = new Label();
         hint.Text = "Пока это окно открыто (или свёрнуто в трей), игра работает.\nСохранения хранятся в браузере.";
-        hint.SetBounds(22, 236, 420, 44);
+        Label dayLabel = new Label();
+        dayLabel.Text = "Длина игрового дня, секунд:";
+        dayLabel.SetBounds(22, 238, 250, 26);
+        Controls.Add(dayLabel);
+        dayBox.SetBounds(280, 235, 90, 26);
+        dayBox.Minimum = 5; dayBox.Maximum = 86400; dayBox.Increment = 10;
+        dayBox.Value = ServerSettings.ReadDay(gameDir);
+        dayBox.ValueChanged += delegate
+        {
+            try { ServerSettings.WriteDay(gameDir, (int)dayBox.Value); }
+            catch (Exception e) { MessageBox.Show("Не удалось сохранить настройки: " + e.Message, Text); }
+        };
+        Controls.Add(dayBox);
+
+        hint.SetBounds(22, 278, 420, 44);
         hint.ForeColor = Color.FromArgb(100, 116, 139);
         hint.Font = new Font("Segoe UI", 9f);
         Controls.Add(hint);
@@ -307,10 +349,13 @@ static class Program
         }
         GameServer server = new GameServer(dir);
 
-        // --console: только сервер, без окна (для проверки и для Linux/Mono)
+        // --console: только сервер, без окна (для проверки и для Linux/Mono); --day N — длина дня в секундах
         if (Array.IndexOf(args, "--console") >= 0)
         {
+            int dayArg = Array.IndexOf(args, "--day");
+            if (dayArg >= 0 && dayArg + 1 < args.Length) ServerSettings.WriteDay(dir, Math.Max(5, int.Parse(args[dayArg + 1])));
             server.Start(Array.IndexOf(args, "--lan") >= 0);
+            Console.WriteLine("Длина дня: " + ServerSettings.ReadDay(dir) + " сек. (bizgame/settings.json)");
             Console.WriteLine("БизСити 3D: " + server.LocalUrl + "  (Ctrl+C — выход)");
             Thread.Sleep(Timeout.Infinite);
             return 0;

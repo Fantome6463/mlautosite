@@ -2,8 +2,9 @@
 // На карте их нет — кроме магазинов, которые занимают коммерческое помещение жилого дома.
 import {
   GOODS, RECIPES, ENTERPRISES, MARKET_SALARY, IMPORT_MARKUP, WHOLESALE_RATE, NPC_QUALITY,
-  SHOP_UNITS_PER_WORKER, TRANSPORT_PER_UNIT, DEPOT,
+  SHOP_UNITS_PER_WORKER, TRANSPORT_PER_UNIT, DEPOT, hqLimit, PROFESSIONS, SPEC_NAMES, SPEC_FACES, specSalary,
 } from './data.js';
+import { pay as ledgerPay, flow } from './ledger.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const round1 = v => Math.round(v * 10) / 10;
@@ -61,9 +62,24 @@ export const hostRent = (s, e) => {
 };
 
 // ---------- создание и управление ----------
+// Сколько разных продуктов выпускает компания (лимит производственного отдела)
+export const products = s => new Set(Object.values(s.enterprises).filter(e => RECIPES[e.recipe]?.ent === e.type).map(e => e.recipe));
+export const staffTotal = s => Object.values(s.enterprises).reduce((a, e) => a + e.workers, 0);
+
+export function canProduce(s, e, recipe) {
+  const set = products(s);
+  if (set.has(recipe)) return true;
+  if (e && e.recipe && [...Object.values(s.enterprises)].filter(x => x.recipe === e.recipe && RECIPES[x.recipe]?.ent === x.type).length === 1) set.delete(e.recipe);
+  return set.size < hqLimit(s, 'prod');
+}
+
 export function createEnterprise(s, type, hostId) {
   const def = ENTERPRISES[type];
+  if (Object.keys(s.enterprises).length >= hqLimit(s, 'manage')) return { error: `Управляющий отдел: лимит ${hqLimit(s, 'manage')} предприятий. Повысьте уровень в штаб-квартире.` };
   if (s.money < def.cost) return { error: `Не хватает денег: нужно ${def.cost.toLocaleString('ru-RU')} ₽` };
+  const options = Object.keys(RECIPES).filter(r => RECIPES[r].ent === type);
+  const recipe = options.find(r => products(s).has(r)) || options.find(r => canProduce(s, null, r)) || null;
+  if (options.length && !recipe) return { error: `Производственный отдел: лимит ${hqLimit(s, 'prod')} продуктов. Повысьте уровень в штаб-квартире.` };
   let host = null;
   if (type === 'shop') {
     host = s.buildings[hostId];
@@ -73,16 +89,16 @@ export function createEnterprise(s, type, hostId) {
       u.occ--; host.tenants.comm?.pop();
     }
   }
-  s.money -= def.cost;
   const count = Object.values(s.enterprises).filter(e => e.type === type).length + 1;
   const e = {
     id: s.nextId++, type, name: `${def.name} №${count}`, level: 1, invested: def.cost,
     workers: 0, target: def.workers, salary: s.marketSalary,
-    recipe: Object.keys(RECIPES).find(r => RECIPES[r].ent === type) || null,
+    recipe,
     stock: {}, buy: {}, autoSell: {}, prices: {}, research: null, progress: 0,
     last: { revenue: 0, expense: 0, produced: {}, sold: {} }, built: s.day, host: host ? host.id : null,
   };
   s.enterprises[e.id] = e;
+  ledgerPay(s, -def.cost, 'buyEnt', { party: host ? 'Владелец дома' : 'Универсальные склады', from: e.name, type: 'Создание предприятия' });
   return { enterprise: e };
 }
 
@@ -92,7 +108,8 @@ export function upgradeEnterprise(s, id) {
   if (!e || e.level >= 3) return { error: 'Максимальный уровень' };
   const cost = upgradeCost(e);
   if (s.money < cost) return { error: `Нужно ${cost.toLocaleString('ru-RU')} ₽` };
-  s.money -= cost; e.invested += cost; e.level++;
+  ledgerPay(s, -cost, 'equipment', { party: 'Универсальные склады', from: e.name, type: 'Покупка оборудования' });
+  e.invested += cost; e.level++;
   e.target = maxWorkers(e);
   return { ok: true };
 }
@@ -101,7 +118,8 @@ export function closeEnterprise(s, id) {
   const e = s.enterprises[id];
   if (!e) return 0;
   const refund = Math.round(e.invested * 0.4);
-  s.money += refund;
+  ledgerPay(s, refund, 'sellEnt', { party: 'Покупатель', from: e.name, type: 'Продажа предприятия' });
+  for (const x of s.specs || []) if (x.job === id) x.job = null;
   s.contracts = s.contracts.filter(c => c.from !== id && c.to !== id);
   delete s.enterprises[id];
   return refund;
@@ -128,7 +146,8 @@ export function sellToMarket(s, e, g, qty) {
   const sum = Math.round(qty * sellPrice(s, g, e.stock[g].q));
   takeStock(e, g, qty);
   s.depot[g] += qty;
-  s.money += sum;
+  flow(s, g, 'whole', qty);
+  ledgerPay(s, sum, 'wholesale', { party: 'Универсальные склады', from: e.name, type: 'Продажа товаров' });
   return sum;
 }
 
@@ -139,7 +158,7 @@ export const researchCost = lvl => Math.round(100 * Math.pow(lvl + 1, 1.3));
 export function productionInfo(s, e) {
   const r = RECIPES[e.recipe];
   if (!r || r.ent !== e.type) return null;
-  const maxOut = r.rate * e.level * (e.workers / maxWorkers(e)) * salaryEff(s, e);
+  const maxOut = r.rate * e.level * (e.workers / maxWorkers(e)) * salaryEff(s, e) * specBonus(s, e);
   let out = maxOut, limitBy = null;
   for (const g in r.inputs) {
     const can = stockQty(e, g) / r.inputs[g];
@@ -162,15 +181,19 @@ export function enterprisesValue(s) {
 export function productionTick(s, { spend, earn, fx, news }) {
   const list = Object.values(s.enterprises);
   for (const e of list) e.last = { revenue: 0, expense: 0, produced: {}, sold: {} };
-  const pay = (e, v) => { spend(v); e.last.expense += v; };
-  const get = (e, v) => { earn(v); e.last.revenue += v; };
+  const pay = (e, v, cat, party) => { spend(v, cat, e.name, party); e.last.expense += v; };
+  const get = (e, v, cat, party) => { earn(v, cat, e.name, party); e.last.revenue += v; };
 
   // найм
+  let freeStaff = hqLimit(s, 'staff') - staffTotal(s);
   for (const e of list) {
     const max = maxWorkers(e);
     e.target = clamp(e.target, 0, max);
     if (e.salary < s.marketSalary * 0.7) e.workers = Math.floor(e.workers * 0.9);
-    else if (e.workers < e.target) e.workers = Math.min(e.target, e.workers + Math.ceil(max * 0.25));
+    else if (e.workers < e.target && freeStaff > 0) {
+      const hire = Math.min(e.target - e.workers, Math.ceil(max * 0.25), freeStaff);
+      e.workers += hire; freeStaff -= hire;
+    }
     if (e.workers > e.target) e.workers = e.target;
   }
   // закупки на оптовом рынке
@@ -184,7 +207,8 @@ export function productionTick(s, { spend, earn, fx, news }) {
     if (qty <= 0) continue;
     addStock(e, g, qty, 2);
     s.depot[g] -= qty;
-    pay(e, qty * price);
+    flow(s, g, 'bought', qty);
+    pay(e, qty * price, 'purchase', 'Универсальные склады');
   }
   // поставки
   for (const c of s.contracts) {
@@ -193,7 +217,7 @@ export function productionTick(s, { spend, earn, fx, news }) {
     const qty = Math.floor(Math.min(c.qty, stockQty(A, c.good), freeSpace(B)));
     if (qty <= 0) continue;
     addStock(B, c.good, qty, takeStock(A, c.good, qty));
-    pay(A, Math.round(qty * TRANSPORT_PER_UNIT));
+    pay(A, Math.round(qty * TRANSPORT_PER_UNIT), 'transport', 'Транспортная компания');
   }
   // производство
   for (const e of list) {
@@ -205,8 +229,9 @@ export function productionTick(s, { spend, earn, fx, news }) {
     n = Math.floor(n);
     if (n <= 0) continue;
     let inQ = 0, inW = 0;
-    for (const g in r.inputs) { inQ += takeStock(e, g, n * r.inputs[g]) * r.inputs[g]; inW += r.inputs[g]; }
-    const bonus = (salaryEff(s, e) - 1) * 3, tq = techQuality(s, e.recipe);
+    for (const g in r.inputs) { inQ += takeStock(e, g, n * r.inputs[g]) * r.inputs[g]; inW += r.inputs[g]; flow(s, g, 'used', n * r.inputs[g]); }
+    flow(s, e.recipe, 'made', n);
+    const bonus = (salaryEff(s, e) - 1) * 3 + specQuality(s, e), tq = techQuality(s, e.recipe);
     const q = inW ? 0.6 * (inQ / inW) + 0.4 * tq + 0.5 + bonus : tq + bonus;
     addStock(e, e.recipe, n, round1(clamp(q, 1, 10)));
     e.last.produced[e.recipe] = n;
@@ -220,7 +245,7 @@ export function productionTick(s, { spend, earn, fx, news }) {
     if (!host) continue;
     const loc = s.plots[`${host.i},${host.j}`].loc;
     const crowd = 0.5 + Math.min(1, cityPop / 3000); // чем больше жителей, тем больше покупателей
-    const cap = e.workers * SHOP_UNITS_PER_WORKER * salaryEff(s, e);
+    const cap = e.workers * SHOP_UNITS_PER_WORKER * salaryEff(s, e) * specBonus(s, e);
     const wants = {};
     let total = 0;
     for (const g in e.stock) {
@@ -237,11 +262,12 @@ export function productionTick(s, { spend, earn, fx, news }) {
       const qty = Math.floor(wants[g] * k);
       if (qty <= 0) continue;
       takeStock(e, g, qty);
-      get(e, Math.round(qty * (e.prices[g] ?? GOODS[g].price)));
+      flow(s, g, 'retail', qty);
+      get(e, Math.round(qty * (e.prices[g] ?? GOODS[g].price)), 'retail', 'Покупатели');
       e.last.sold[g] = qty;
     }
     const rent = hostRent(s, e);
-    if (rent) { pay(e, rent); s.rivals[host.owner].worth += rent; }
+    if (rent) { pay(e, rent, 'shopRent', s.rivals[host.owner].name); s.rivals[host.owner].worth += rent; }
     shopRevenue += e.last.revenue;
     if (e.last.revenue > 0) fx.push({ type: 'money', i: host.i, j: host.j, amount: e.last.revenue });
   }
@@ -254,7 +280,8 @@ export function productionTick(s, { spend, earn, fx, news }) {
     const v = Math.round(qty * sellPrice(s, g, e.stock[g].q));
     takeStock(e, g, qty);
     s.depot[g] += qty;
-    get(e, v);
+    flow(s, g, 'whole', qty);
+    get(e, v, 'wholesale', 'Универсальные склады');
     e.last.sold[g] = (e.last.sold[g] || 0) + qty;
   }
   // исследования
@@ -262,7 +289,7 @@ export function productionTick(s, { spend, earn, fx, news }) {
     if (e.type !== 'lab' || !e.research) continue;
     const lvl = s.tech[e.research];
     if (lvl >= 10) continue;
-    e.progress += e.workers * salaryEff(s, e) * e.level;
+    e.progress += e.workers * salaryEff(s, e) * e.level * specBonus(s, e);
     if (e.progress >= researchCost(lvl)) {
       e.progress -= researchCost(lvl);
       s.tech[e.research] = lvl + 1;
@@ -271,9 +298,12 @@ export function productionTick(s, { spend, earn, fx, news }) {
   }
   // зарплаты и содержание
   for (const e of list) {
-    pay(e, e.workers * e.salary);
-    pay(e, ENTERPRISES[e.type].upkeep * e.level);
+    pay(e, e.workers * e.salary, 'salary', 'Сотрудники');
+    pay(e, ENTERPRISES[e.type].upkeep * e.level, 'upkeep', 'Коммунальные службы');
+    (e.hist ||= []).push({ rev: e.last.revenue, exp: e.last.expense });
+    if (e.hist.length > 60) e.hist.shift();
   }
+  specsTick(s, { spend, news });
   // склады: подвоз извне и покупки остальных горожан; цена растёт при дефиците
   for (const g in s.prices) {
     const d = DEPOT[GOODS[g].kind];
@@ -285,6 +315,60 @@ export function productionTick(s, { spend, earn, fx, news }) {
     s.prices[g] = round1(Math.max(1, s.prices[g] * (1 + (Math.random() - 0.5) * 0.04) + (target - s.prices[g]) * 0.12));
   }
   for (const m of [s.priceMods, s.demandMods]) for (const g in m) if (--m[g].days <= 0) delete m[g];
+}
+
+// ---------- специалисты ----------
+export const specOf = (s, e) => (s.specs || []).find(x => x.job === e.id);
+export const specBonus = (s, e) => { const x = specOf(s, e); return x ? 1 + 0.03 * x.level : 1; };
+export const specQuality = (s, e) => { const x = specOf(s, e); return x ? 0.08 * x.level : 0; };
+export const hireFee = c => specSalary(c.level) * 7;
+
+function newCandidate(s) {
+  const types = Object.keys(PROFESSIONS);
+  const type = types[Math.floor(Math.random() * types.length)];
+  const sex = Math.random() < 0.6 ? 'm' : 'f';
+  const pickOne = a => a[Math.floor(Math.random() * a.length)];
+  const level = Math.min(10, 1 + Math.floor(Math.pow(Math.random(), 2) * 8));
+  return { id: s.nextId++, name: pickOne(SPEC_NAMES[sex]), face: pickOne(SPEC_FACES[sex]), type, prof: PROFESSIONS[type], level, xp: 0, job: null };
+}
+export function refreshCandidates(s) {
+  s.candidates = Array.from({ length: 6 }, () => newCandidate(s));
+}
+export function hireSpec(s, id) {
+  const c = s.candidates.find(x => x.id === id);
+  if (!c) return { error: 'Кандидат уже ушёл' };
+  const fee = hireFee(c);
+  if (s.money < fee) return { error: `Нужно ${fee.toLocaleString('ru-RU')} ₽ на подбор` };
+  ledgerPay(s, -fee, 'hire', { party: 'Кадровое агентство', from: c.name, type: 'Найм специалиста' });
+  s.candidates = s.candidates.filter(x => x !== c);
+  s.specs.push(c);
+  const free = Object.values(s.enterprises).find(e => e.type === c.type && !specOf(s, e));
+  if (free) c.job = free.id;
+  return { spec: c };
+}
+export function fireSpec(s, id) { s.specs = s.specs.filter(x => x.id !== id); }
+export function assignSpec(s, id, entId) {
+  const x = s.specs.find(y => y.id === id);
+  if (!x) return { error: 'Специалист не найден' };
+  if (!entId) { x.job = null; return { ok: true }; }
+  const e = s.enterprises[entId];
+  if (!e || e.type !== x.type) return { error: `${x.prof} может работать только: ${ENTERPRISES[x.type].name}` };
+  for (const y of s.specs) if (y.job === entId) y.job = null;
+  x.job = entId;
+  return { ok: true };
+}
+
+function specsTick(s, { spend, news }) {
+  s.specs ||= [];
+  if (!s.candidates?.length || s.day % 7 === 0) refreshCandidates(s);
+  for (const x of s.specs) {
+    spend(specSalary(x.level), 'specSalary', x.name, x.name);
+    if (!x.job) continue;
+    if (++x.xp >= x.level * 15 && x.level < 20) {
+      x.xp = 0; x.level++;
+      news(`⭐ ${x.name} (${x.prof}) повысил квалификацию до ${x.level}-го уровня`);
+    }
+  }
 }
 
 export function goodsEvent(s, e) {

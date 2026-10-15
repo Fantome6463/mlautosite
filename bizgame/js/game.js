@@ -2,10 +2,12 @@
 // Модуль не знает ни про DOM, ни про 3D — только данные.
 import {
   UNITS, BUILDINGS, CONTRACTORS, ADVANCE, START_MONEY, GRID, isRoad, RIVALS, EVENTS, TENANTS, CATEGORIES, OWN,
+  HQ, HQ_MAX, hqLimit, hqUpgradeCost,
 } from './data.js';
 import {
-  initProduction, productionTick, enterprisesValue, goodsEvent, shopsIn, stockQty, takeStock, maxWorkers, salaryEff,
+  initProduction, productionTick, enterprisesValue, goodsEvent, shopsIn, stockQty, takeStock, maxWorkers, salaryEff, specBonus, refreshCandidates,
 } from './production.js';
+import { initLedger, pay, closeDay, flow } from './ledger.js';
 
 const SAVE_KEY = 'bizgame-save-v2';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -36,7 +38,9 @@ export function newGame() {
     mods: {}, plots: {}, buildings: {}, history: [], news: [], quests: {},
     city: { households: 0, jobs: 0, demand: { apt: 0, office: 0, comm: 0 } },
     rivals: RIVALS.map(r => ({ ...r, worth: 200000 + Math.random() * 150000 })),
-    company: 'Моя компания',
+    company: 'Моя компания', cityName: 'Новоград',
+    hq: { staff: 1, manage: 1, prod: 1, build: 1 },
+    accNo: 100000 + Math.floor(Math.random() * 900000),
   };
   const c = (GRID - 1) / 2;
   for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
@@ -49,8 +53,11 @@ export function newGame() {
     };
   }
   initProduction(s);
+  initLedger(s);
+  s.specs = [];
+  refreshCandidates(s);
   addNews(s, `Город только основан — участки пустые. Стартовый капитал ${fmt(START_MONEY)}.`);
-  pushHistory(s, 0, 0);
+  pushHistory(s);
   return s;
 }
 
@@ -62,7 +69,13 @@ export function load() {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw);
-    return s && s.version === 2 ? s : null;
+    if (!s || s.version !== 2) return null;
+    s.hq ||= { staff: 1, manage: 1, prod: 1, build: 1 };
+    s.cityName ||= 'Новоград';
+    s.accNo ||= 100000 + Math.floor(Math.random() * 900000);
+    initLedger(s);
+    s.specs ||= []; s.candidates ||= [];
+    return s;
   } catch { return null; }
 }
 export function wipeSave() {
@@ -97,6 +110,8 @@ export function orderCheck(s, type, floors, contractor, i, j) {
   if (buildingAt(s, i, j)) return 'Участок уже занят';
   const q = quote(s, type, floors, contractor);
   if (q.own && !builders(s).length) return 'Сначала создайте строительную компанию (меню «Предприятия»)';
+  const sites = mine(s).filter(b => b.state === 'build').length;
+  if (sites >= hqLimit(s, 'build')) return `Строительный отдел: не больше ${hqLimit(s, 'build')} строек одновременно. Повысьте уровень в штаб-квартире.`;
   const need = p.price + (q.own ? 0 : Math.round(q.cost * ADVANCE));
   if (s.money < need) return `Не хватает денег: нужно ${fmt(need)} (земля + аванс)`;
   return null;
@@ -110,7 +125,11 @@ export function order(s, type, floors, contractor, i, j, owner = 'player') {
   const p = s.plots[key(i, j)];
   const q = quote(s, type, floors, contractor);
   const advance = q.own ? 0 : Math.round(q.cost * ADVANCE);
-  if (owner === 'player') s.money -= p.price + advance;
+  const bname = `${BUILDINGS[type].name} (участок ${i}:${j})`;
+  if (owner === 'player') {
+    pay(s, -p.price, 'land', { party: 'Городская администрация', from: bname, type: 'Покупка земли' });
+    pay(s, -advance, 'construction', { party: CONTRACTORS[contractor]?.name, from: bname, type: 'Аванс подрядчику' });
+  }
   const units = {};
   for (const [t, n] of Object.entries(BUILDINGS[type].units(floors))) {
     units[t] = { total: n, occ: 0, rent: Math.round(refRent(p, t)) };
@@ -133,7 +152,7 @@ export function cancelBuild(s, id) {
   const b = s.buildings[id];
   if (!b || b.state !== 'build') return;
   const refund = Math.round(b.land * 0.8 + (b.contractor === 'own' ? 0 : b.paid * 0.3));
-  s.money += refund;
+  pay(s, refund, 'sellEstate', { party: 'Городская администрация', from: bName(b), type: 'Отмена стройки' });
   delete s.buildings[id];
   addNews(s, `Стройка отменена, возвращено ${fmt(refund)}`);
 }
@@ -150,7 +169,7 @@ export function sell(s, id) {
   if (!b || b.state !== 'done') return;
   if (shopsIn(s, b).length) return { error: 'В доме работает ваш магазин — сначала закройте его' };
   const v = Math.round(marketValue(b) * 0.9);
-  s.money += v;
+  pay(s, v, 'sellEstate', { party: 'Покупатель недвижимости', from: bName(b), type: 'Продажа здания' });
   delete s.buildings[id];
   addNews(s, `${BUILDINGS[b.type].name} продан за ${fmt(v)}`);
   return { ok: true };
@@ -186,14 +205,18 @@ export const maxLoan = s => Math.max(0, Math.round((netWorth(s) * 0.5 - s.loan) 
 export function takeLoan(s, amount) {
   amount = Math.min(amount, maxLoan(s));
   if (amount <= 0) return { error: 'Банк отказал: недостаточно капитала' };
-  s.loan += amount; s.money += amount;
+  s.loan += amount;
+  pay(s, amount, 'loan', { party: 'Городской банк', type: 'Получение кредита' });
+  s.loanLog.unshift({ day: s.day, kind: 'Получен кредит', amount, loan: s.loan });
   addNews(s, `Взят кредит ${fmt(amount)} под 0,1% в день`);
   return { ok: true };
 }
 export function repayLoan(s, amount) {
   amount = Math.min(amount, s.loan, Math.max(0, s.money));
   if (amount <= 0) return;
-  s.loan -= amount; s.money -= amount;
+  s.loan -= amount;
+  pay(s, -amount, 'repay', { party: 'Городской банк', type: 'Погашение кредита' });
+  s.loanLog.unshift({ day: s.day, kind: 'Погашение', amount, loan: s.loan });
 }
 
 export function netWorth(s) {
@@ -220,7 +243,6 @@ export function upkeep(s, b) {
 // ---------- игровой день ----------
 export function tick(s) {
   const fx = [];
-  const day = { income: 0, expense: 0 };
   const all = Object.values(s.buildings);
 
   // 1. Стройки
@@ -228,11 +250,11 @@ export function tick(s) {
   for (const b of all) if (b.state === 'build' && b.contractor === 'own') sites[b.builder] = (sites[b.builder] || 0) + 1;
   for (const b of all) {
     if (b.state !== 'build') continue;
-    if (b.contractor === 'own') { ownBuildStep(s, b, sites[b.builder], day); finishIfDone(s, b, fx); continue; }
+    if (b.contractor === 'own') { ownBuildStep(s, b, sites[b.builder]); finishIfDone(s, b, fx); continue; }
     const c = CONTRACTORS[b.contractor];
-    const pay = Math.round((b.cost * (1 - ADVANCE)) / b.buildDays);
+    const due = Math.round((b.cost * (1 - ADVANCE)) / b.buildDays);
     if (isPlayer(b)) {
-      if (s.money < pay) {
+      if (s.money < due) {
         if (!b.paused) addNews(s, `⛔ Стройка №${b.id} остановлена: нечем платить подрядчику`);
         b.paused = true;
         continue;
@@ -241,8 +263,8 @@ export function tick(s) {
     }
     if (Math.random() < c.delay) { b.delayed = true; continue; }
     b.delayed = false;
-    if (isPlayer(b)) { s.money -= pay; day.expense += pay; }
-    b.paid += pay;
+    if (isPlayer(b)) pay(s, -due, 'construction', { party: c.name, from: bName(b), type: 'Оплата строительства' });
+    b.paid += due;
     b.progress++;
     finishIfDone(s, b, fx);
   }
@@ -286,11 +308,17 @@ export function tick(s) {
     const d = BUILDINGS[b.type];
     let income = d.subsidy || 0;
     for (const t in b.units) income += b.units[t].occ * b.units[t].rent;
-    const expense = upkeep(s, b);
+    const expense = upkeep(s, b), tax = Math.round(b.land * 0.0005);
     b.last = { income, expense };
     if (isPlayer(b)) {
-      s.money += income - expense;
-      day.income += income; day.expense += expense;
+      const from = bName(b);
+      if (d.subsidy) pay(s, d.subsidy, 'subsidy', { party: 'Городская администрация', from, type: 'Госзаказ' });
+      const rent = income - (d.subsidy || 0);
+      if (rent) pay(s, rent, 'rent', { party: 'Арендаторы', from, type: 'Арендная плата' });
+      pay(s, -(expense - tax), 'estate', { party: 'Коммунальные службы', from, type: 'Содержание здания' });
+      pay(s, -tax, 'tax', { party: 'Налоговая служба', from, type: 'Налог на землю' });
+      (b.hist ||= []).push({ rev: income, exp: expense });
+      if (b.hist.length > 60) b.hist.shift();
       if (income > 0) fx.push({ type: 'money', id: b.id, amount: income - expense });
     } else {
       s.rivals[b.owner].worth += (income - expense) * 0.6;
@@ -300,11 +328,11 @@ export function tick(s) {
 
   // 5. Виртуальные предприятия
   productionTick(s, {
-    spend: v => { s.money -= v; day.expense += v; },
-    earn: v => { s.money += v; day.income += v; },
+    spend: (v, cat, from, party) => pay(s, -v, cat, { from, party }),
+    earn: (v, cat, from, party) => pay(s, v, cat, { from, party }),
     fx, news: t => addNews(s, t),
   });
-  if (s.loan > 0) { const v = Math.round(s.loan * 0.001); s.money -= v; day.expense += v; }
+  if (s.loan > 0) pay(s, -s.loan * 0.001, 'interest', { party: 'Городской банк', type: 'Проценты по кредиту' });
 
   // 6. События, конкуренты
   for (const k in s.mods) if (--s.mods[k].days <= 0) delete s.mods[k];
@@ -324,15 +352,15 @@ export function tick(s) {
   s.debtDays = s.money < 0 ? s.debtDays + 1 : 0;
   if (s.debtDays >= 15) { s.bankrupt = true; fx.push({ type: 'bankrupt' }); }
   else if (s.debtDays === 1) addNews(s, '⚠️ Счёт ушёл в минус! 15 дней в минусе — банкротство.');
-  pushHistory(s, day.income, day.expense);
   for (const q of QUESTS) {
     if (!s.quests[q.id] && q.check(s)) {
       s.quests[q.id] = true;
-      s.money += q.reward;
+      pay(s, q.reward, 'other', { party: 'Городская администрация', type: 'Награда за задание' });
       addNews(s, `🏆 Задание выполнено: «${q.text}» +${fmt(q.reward)}`);
       fx.push({ type: 'quest', quest: q });
     }
   }
+  pushHistory(s);
   return fx;
 }
 
@@ -366,11 +394,11 @@ function finishIfDone(s, b, fx) {
 
 // Стройка своими силами: бригада строительной компании + стройматериалы с её склада.
 // Если площадок несколько, бригада делится между ними.
-export function ownBuildStep(s, b, siteCount, day) {
+export function ownBuildStep(s, b, siteCount) {
   const e = s.enterprises[b.builder] || builders(s)[0];
   if (!e) { b.paused = true; b.waiting = 'company'; return; }
   b.builder = e.id;
-  const crew = (e.workers / maxWorkers(e)) * salaryEff(s, e) * (1 + 0.5 * (e.level - 1));
+  const crew = (e.workers / maxWorkers(e)) * salaryEff(s, e) * (1 + 0.5 * (e.level - 1)) * specBonus(s, e);
   let step = Math.min(crew / Math.max(1, siteCount), b.buildDays - b.progress);
   if (step <= 0.01) { b.paused = true; b.waiting = 'crew'; return; }
   let lack = null;
@@ -384,18 +412,50 @@ export function ownBuildStep(s, b, siteCount, day) {
   for (const g in b.materials) {
     const use = (b.materials[g] / b.buildDays) * step;
     takeStock(e, g, use);
+    flow(s, g, 'used', use);
     b.paid += Math.round(use * s.prices[g]);
   }
   b.progress += step;
 }
 
-function pushHistory(s, income, expense) {
-  s.history.push({ day: s.day, money: Math.round(s.money), worth: netWorth(s), income: Math.round(income), expense: Math.round(expense) });
-  if (s.history.length > 120) s.history.shift();
+const bName = b => `${BUILDINGS[b.type].name} №${b.id}`;
+const sum = o => Object.values(o).reduce((a, v) => a + v, 0);
+
+// Структура активов — для отчёта «Активы, обязательства»
+export function assets(s) {
+  const a = { buildings: 0, wip: 0, equipment: 0, stock: 0, hq: 0, cash: Math.max(0, s.money), loan: s.loan };
+  for (const b of mine(s)) if (b.state === 'done') a.buildings += marketValue(b); else a.wip += invested(b);
+  for (const e of Object.values(s.enterprises)) {
+    a.equipment += e.invested * 0.6;
+    for (const g in e.stock) a.stock += e.stock[g].qty * s.prices[g] * 0.6;
+  }
+  for (const k in s.hq) for (let l = 1; l < s.hq[k]; l++) a.hq += hqUpgradeCost(l) * 0.5;
+  for (const k in a) a[k] = Math.round(a[k]);
+  return a;
+}
+
+// Итоги дня: всё, что накопилось в s.today (и от действий игрока, и от расчёта дня)
+function pushHistory(s) {
+  const { day, flow: fl } = closeDay(s);
+  s.history.push({ day: s.day, money: Math.round(s.money), worth: netWorth(s), income: Math.round(sum(day.inc)), expense: Math.round(sum(day.exp)),
+    inc: day.inc, exp: day.exp, flow: fl, assets: assets(s) });
+  if (s.history.length > 400) s.history.shift();
 }
 export function addNews(s, text) {
   s.news.unshift({ day: s.day, text });
   if (s.news.length > 60) s.news.pop();
+}
+
+// ---------- штаб-квартира ----------
+export function upgradeHQ(s, k) {
+  const l = s.hq[k];
+  if (l >= HQ_MAX) return { error: 'Максимальный уровень' };
+  const cost = hqUpgradeCost(l);
+  if (s.money < cost) return { error: `Нужно ${fmt(cost)}` };
+  pay(s, -cost, 'hq', { party: 'Подрядчик штаб-квартиры', from: 'Штаб-квартира', type: `${HQ[k].name}: уровень ${l + 1}` });
+  s.hq[k] = l + 1;
+  addNews(s, `🏛️ ${HQ[k].name} — уровень ${l + 1}`);
+  return { ok: true };
 }
 
 export function fmt(v) {

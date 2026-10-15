@@ -10,49 +10,61 @@
 </head>
 <body>
   <div id="app">
-    <div id="scene"></div>
-    <div id="badges"></div>
-    <div id="labels"></div>
-
-    <header id="topbar">
-      <div class="brand">🏙️ <b>БизСити</b><span>3D</span></div>
-      <div class="stats">
-        <div class="stat"><small>Деньги</small><b id="money">—</b></div>
-        <div class="stat"><small>Капитал</small><b id="worth">—</b></div>
-        <div class="stat"><small>Прибыль за день</small><b id="profit">—</b></div>
-        <div class="stat"><small>Население</small><b id="pop">—</b></div>
-        <div class="stat"><small>День</small><b id="day">—</b><i id="dayBar"></i></div>
+    <header id="hdr">
+      <div class="logo">
+        <b>БИЗ<span>$</span>ИТИ <i>3D</i></b>
+        <small>экономическая стратегия</small>
+        <small>до нового дня ~ <b id="dayLeft">—</b></small>
       </div>
-      <div class="speed" id="speed">
-        <button data-speed="0" title="Пауза (пробел)">⏸</button>
-        <button data-speed="1" title="Обычная скорость">▶</button>
-        <button data-speed="2" title="Быстро">⏩</button>
-        <button data-speed="4" title="Очень быстро">⏭</button>
+      <div class="who">
+        <div>Компания: <b id="hdrCompany">—</b> · <a href="#" data-page="settings">настройки</a></div>
+        <div>Деньги: <b id="money">—</b> · Капитал: <b id="worth">—</b> · Население: <b id="pop">—</b></div>
+        <div>Дата: <b id="date">—</b></div>
       </div>
     </header>
 
-    <nav id="menu">
-      <button data-win="company" title="Компания">📊<span>Компания</span></button>
-      <button data-win="enterprises" title="Предприятия">🏭<span>Предприятия</span></button>
-      <button data-win="contracts" title="Поставки">🚚<span>Поставки</span></button>
-      <button data-win="market" title="Рынок">💹<span>Рынок</span></button>
-      <button data-win="rating" title="Рейтинг">🏆<span>Рейтинг</span></button>
-      <button data-win="quests" title="Задания">🎯<span>Задания</span><em id="questDot"></em></button>
-      <button data-win="bank" title="Банк">🏦<span>Банк</span></button>
-      <button data-win="help" title="Как играть">❔<span>Помощь</span></button>
-      <button data-win="reset" title="Сбросить прогресс">🔄<span>Сброс</span></button>
+    <nav id="toolbar">
+      <button data-page="city" title="Город (3D)"><i>🌐</i></button>
+      <span class="sep"></span>
+      <button data-page="company" data-tab="main" title="Компания"><i>🏢</i></button>
+      <button data-page="company" data-tab="ent" title="Предприятия"><i>🏭</i></button>
+      <button data-page="company" data-tab="staff" title="Специалисты"><i>🧑‍💼</i></button>
+      <button data-page="builds" title="Стройки"><i>🏗️</i></button>
+      <span class="sep"></span>
+      <button data-page="company" data-tab="finance" title="Финансы"><i>💲</i></button>
+      <button data-page="market" title="Рынок"><i>💹</i></button>
+      <button data-page="contracts" title="Поставки"><i>🚚</i></button>
+      <button data-page="rating" title="Рейтинг"><i>🏆</i></button>
+      <button data-page="quests" title="Задания"><i>📝</i><em id="questDot"></em></button>
+      <button data-page="company" data-tab="reports" title="Отчёты"><i>📋</i></button>
+      <span class="grow"></span>
+      <button data-page="help" title="Как играть"><i>❔</i></button>
+      <button data-page="settings" title="Настройки"><i>⚙️</i></button>
     </nav>
 
-    <aside id="side" hidden></aside>
-    <div id="news"></div>
-    <div id="toasts"></div>
-
-    <div id="modal" hidden>
-      <div class="win">
-        <header><h2 id="modalTitle"></h2><button class="x" id="modalClose">✕</button></header>
-        <div id="modalBody"></div>
+    <main id="main">
+      <div id="cityHolder" hidden>
+        <div id="cityView"><div id="scene"></div><div id="badges"></div><div id="labels"></div></div>
       </div>
-    </div>
+      <section id="page"><div id="pageBody"></div></section>
+      <aside id="side" hidden></aside>
+      <div id="toasts"></div>
+    </main>
+
+    <footer id="bottombar">
+      <button data-page="city" title="Город"><i>🌐</i></button>
+      <button data-page="company" data-tab="main" title="Компания"><i>🏢</i></button>
+      <button data-page="company" data-tab="ent" title="Предприятия"><i>🏭</i></button>
+      <button data-page="builds" title="Стройки"><i>🏗️</i></button>
+      <button data-page="company" data-tab="reports" title="Новости и отчёты"><i>✉️</i></button>
+      <div id="news"></div>
+      <div class="speed" id="speed">
+        <button data-speed="0" title="Пауза (пробел)">⏸</button>
+        <button data-speed="1" title="Обычная скорость">▶</button>
+        <button data-speed="2" title="Быстрее ×2">⏩</button>
+        <button data-speed="4" title="Быстрее ×4">⏭</button>
+      </div>
+    </footer>
 
     <div id="loading">Строим город…</div>
   </div>

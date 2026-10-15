@@ -284,6 +284,7 @@ export class World {
 
   resize() {
     const w = this.container.clientWidth, h = this.container.clientHeight;
+    if (!w || !h) return;
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -381,6 +382,7 @@ export class World {
       this.bObjs.set(b.id, g);
     }
     for (const [id, g] of this.bObjs) if (!alive.has(id)) { this.scene.remove(g); this.bObjs.delete(id); }
+    if (this.coverage) this.updateCoverage(state);
   }
 
   buildCars() {
@@ -417,6 +419,26 @@ export class World {
   }
 
   focus(i, j) { this.camGoal = toWorld(i, j); }
+
+  // Круги охвата больниц и полиции: зелёные — свои, красные — конкурентов
+  setCoverage(kind, on, state) {
+    this.coverage = { ...(this.coverage || {}), [kind]: on };
+    this.updateCoverage(state);
+  }
+  updateCoverage(state) {
+    if (this.coverGroup) this.scene.remove(this.coverGroup);
+    const g = this.coverGroup = new THREE.Group();
+    for (const b of Object.values(state.buildings)) {
+      if (b.state !== 'done' || !this.coverage?.[b.type]) continue;
+      const r = BUILDINGS[b.type].radius * CELL + CELL / 2;
+      const color = b.owner === 'player' ? '#22c55e' : '#ef4444';
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(r, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.13, depthWrite: false }));
+      const ring = new THREE.Mesh(new THREE.RingGeometry(r - 0.4, r, 64), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, depthWrite: false }));
+      const p = toWorld(b.i, b.j);
+      for (const m of [disc, ring]) { m.rotation.x = -Math.PI / 2; m.position.set(p.x, 0.45, p.z); g.add(m); }
+    }
+    this.scene.add(g);
+  }
 
   // фаза суток 0..1
   setDayPhase(t) {
@@ -476,6 +498,7 @@ export class World {
 
   frame() {
     const dt = Math.min(this.clock.getDelta(), 0.1);
+    if (this.paused) return; // открыта страница — город не рисуем
     const now = performance.now();
     if (this.camGoal) {
       const t = this.controls.target, d = this.camGoal.clone().sub(t).multiplyScalar(Math.min(1, dt * 5));
