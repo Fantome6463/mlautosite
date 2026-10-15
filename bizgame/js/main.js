@@ -1,8 +1,9 @@
 // Точка входа: игровой цикл связывает экономику, 3D-мир и интерфейс.
 import * as G from './game.js';
+import * as P from './production.js';
 import { World } from './world.js';
 import { UI } from './ui.js';
-import { GOODS } from './data.js';
+import { GOODS, BUILDINGS } from './data.js';
 
 const DAY_MS = 5000; // длина дня при скорости ×1
 const CYCLE_DAYS = 3; // полный цикл день/ночь
@@ -13,9 +14,15 @@ const app = {
   acc: 0,
   act(fn) { const r = fn(); world.syncPlots(app.state); world.syncBuildings(app.state); ui.renderTop(app.acc / DAY_MS); return r; },
   select(i, j, focus = false) {
-    world.setSelected(i, j);
-    ui.select(i, j);
+    const b = i == null ? null : G.buildingAt(app.state, i, j);
+    world.setSelected(i, j, b && b.state === 'done' ? BUILDINGS[b.type].radius || 0 : 0);
+    ui.selectPlot(i, j);
     if (focus && i != null) world.focus(i, j);
+  },
+  selectEnt(id) {
+    const e = app.state.enterprises[id], h = e?.host && app.state.buildings[e.host];
+    world.setSelected(h ? h.i : null, h ? h.j : null);
+    ui.selectEnt(id);
   },
   newGame() {
     G.wipeSave();
@@ -36,7 +43,7 @@ ui.renderTop(0);
 
 document.getElementById('loading').style.opacity = 0;
 setTimeout(() => document.getElementById('loading').remove(), 600);
-if (app.state.day === 1 && !Object.keys(app.state.buildings).length) ui.openWin('help');
+if (app.state.day === 1 && !Object.values(app.state.buildings).some(G.isPlayer)) ui.openWin('help');
 
 function setSpeed(v) {
   app.speed = v;
@@ -56,9 +63,14 @@ function runDay() {
   const s = app.state;
   const fx = G.tick(s);
   for (const f of fx) {
-    if (f.type === 'truck') world.spawnTruck(s.buildings[f.from], s.buildings[f.to], f.good);
-    else if (f.type === 'money') { const b = s.buildings[f.id]; world.floatText(b.i, b.j, '+' + G.fmt(f.amount)); }
-    else if (f.type === 'research') { const b = s.buildings[f.id]; world.floatText(b.i, b.j, '🔬 Открытие!', 'info'); }
+    if (f.type === 'money') {
+      const b = f.id ? s.buildings[f.id] : null;
+      if (b && s.day % 2) continue; // аренда — через день, чтобы не рябило
+      world.floatText(b ? b.i : f.i, b ? b.j : f.j, (f.amount >= 0 ? '+' : '') + G.fmt(f.amount), f.amount < 0 ? 'neg' : '');
+    } else if (f.type === 'built') {
+      const b = s.buildings[f.id];
+      if (b && b.owner === 'player') { world.floatText(b.i, b.j, '🎉 Достроено!', 'info'); ui.toast(`🎉 ${BUILDINGS[b.type].name} №${b.id} достроен!`); }
+    }
     else if (f.type === 'quest') ui.toast(`🏆 Задание выполнено! +${G.fmt(f.quest.reward)}`);
     else if (f.type === 'bankrupt') {
       setSpeed(0);
@@ -67,11 +79,7 @@ function runDay() {
       return;
     }
   }
-  // сводные расходы — красной подписью над зданием, если оно ушло в минус
-  for (const b of Object.values(s.buildings)) {
-    const p = b.last.revenue - b.last.expense;
-    if (b.last.revenue === 0 && p < -500 && Math.random() < 0.3) world.floatText(b.i, b.j, G.fmt(p), 'neg');
-  }
+  world.syncPlots(s);
   world.syncBuildings(s);
   ui.renderSide();
   ui.refreshWin();
@@ -98,4 +106,4 @@ addEventListener('beforeunload', () => G.save(app.state));
 document.addEventListener('visibilitychange', () => { if (document.hidden) G.save(app.state); });
 
 // для отладки из консоли
-window.biz = { app, G, GOODS };
+window.biz = { app, G, P, GOODS };

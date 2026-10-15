@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>БизСити 3D — экономическая стратегия</title>
-  <meta name="description" content="Браузерная экономическая стратегия в 3D: стройте фермы, заводы и магазины, налаживайте поставки и обгоните конкурентов.">
+  <meta name="description" content="Браузерная экономическая стратегия в 3D: застраивайте пустой город, стройте офисы, жилые дома, больницы и полицию, налаживайте производство.">
   <link rel="stylesheet" href="style.css">
   <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
 </head>
@@ -20,6 +20,7 @@
         <div class="stat"><small>Деньги</small><b id="money">—</b></div>
         <div class="stat"><small>Капитал</small><b id="worth">—</b></div>
         <div class="stat"><small>Прибыль за день</small><b id="profit">—</b></div>
+        <div class="stat"><small>Население</small><b id="pop">—</b></div>
         <div class="stat"><small>День</small><b id="day">—</b><i id="dayBar"></i></div>
       </div>
       <div class="speed" id="speed">
@@ -32,12 +33,14 @@
 
     <nav id="menu">
       <button data-win="company" title="Компания">📊<span>Компания</span></button>
+      <button data-win="enterprises" title="Предприятия">🏭<span>Предприятия</span></button>
       <button data-win="contracts" title="Поставки">🚚<span>Поставки</span></button>
       <button data-win="market" title="Рынок">💹<span>Рынок</span></button>
       <button data-win="rating" title="Рейтинг">🏆<span>Рейтинг</span></button>
       <button data-win="quests" title="Задания">🎯<span>Задания</span><em id="questDot"></em></button>
       <button data-win="bank" title="Банк">🏦<span>Банк</span></button>
       <button data-win="help" title="Как играть">❔<span>Помощь</span></button>
+      <button data-win="reset" title="Сбросить прогресс">🔄<span>Сброс</span></button>
     </nav>
 
     <aside id="side" hidden></aside>
