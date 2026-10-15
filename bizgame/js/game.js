@@ -6,6 +6,7 @@ import {
 } from './data.js';
 import {
   initProduction, productionTick, enterprisesValue, goodsEvent, shopsIn, stockQty, takeStock, maxWorkers, salaryEff, specBonus, refreshCandidates,
+  workersOf, levelOf, migrateEnterprises,
 } from './production.js';
 import { initLedger, pay, closeDay, flow } from './ledger.js';
 
@@ -75,6 +76,7 @@ export function load() {
     s.accNo ||= 100000 + Math.floor(Math.random() * 900000);
     initLedger(s);
     s.specs ||= []; s.candidates ||= [];
+    migrateEnterprises(s);
     return s;
   } catch { return null; }
 }
@@ -87,6 +89,8 @@ export const buildingAt = (s, i, j) => Object.values(s.buildings).find(b => b.i 
 const mod = (s, k) => s.mods[k]?.mult || 1;
 
 export const materialsFor = (type, floors) => Object.fromEntries(Object.entries(BUILDINGS[type].materials).map(([g, n]) => [g, n * floors]));
+// Уровень компании растёт с капиталом: открывает новые виды предприятий
+export const companyLevel = s => Math.max(1, Math.floor(Math.log2(Math.max(1, netWorth(s)) / 125000)) + 1);
 export const builders = s => Object.values(s.enterprises).filter(e => e.type === 'construction');
 
 export function quote(s, type, floors, contractor) {
@@ -398,7 +402,7 @@ export function ownBuildStep(s, b, siteCount) {
   const e = s.enterprises[b.builder] || builders(s)[0];
   if (!e) { b.paused = true; b.waiting = 'company'; return; }
   b.builder = e.id;
-  const crew = (e.workers / maxWorkers(e)) * salaryEff(s, e) * (1 + 0.5 * (e.level - 1)) * specBonus(s, e);
+  const crew = (workersOf(e) / Math.max(1, maxWorkers(e))) * salaryEff(s, e) * (1 + 0.5 * (levelOf(e) - 1)) * specBonus(s, e);
   let step = Math.min(crew / Math.max(1, siteCount), b.buildDays - b.progress);
   if (step <= 0.01) { b.paused = true; b.waiting = 'crew'; return; }
   let lack = null;

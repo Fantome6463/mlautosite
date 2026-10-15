@@ -1,69 +1,8 @@
 // Справочники игры: товары и виртуальные предприятия, здания в городе, подрядчики, события.
 
-// ---------- Производство (виртуальные предприятия — без места на карте) ----------
-export const GOODS = {
-  grain:      { name: 'Зерно',       icon: '🌾', price: 8,   kind: 'raw' },
-  milk:       { name: 'Молоко',      icon: '🥛', price: 12,  kind: 'raw' },
-  cotton:     { name: 'Хлопок',      icon: '☁️', price: 9,   kind: 'raw' },
-  wood:       { name: 'Древесина',   icon: '🪵', price: 10,  kind: 'raw' },
-  ore:        { name: 'Руда',        icon: '⛰️', price: 14,  kind: 'raw' },
-  oil:        { name: 'Нефть',       icon: '🛢️', price: 20,  kind: 'raw' },
-  stone:      { name: 'Камень',      icon: '🪨', price: 6,   kind: 'raw' },
-  sand:       { name: 'Песок',       icon: '⏳', price: 4,   kind: 'raw' },
-  flour:      { name: 'Мука',        icon: '🥡', price: 22,  kind: 'mid' },
-  lumber:     { name: 'Доски',       icon: '🪚', price: 25,  kind: 'mid' },
-  steel:      { name: 'Сталь',       icon: '🔩', price: 55,  kind: 'mid' },
-  fabric:     { name: 'Ткань',       icon: '🧵', price: 28,  kind: 'mid' },
-  plastic:    { name: 'Пластик',     icon: '🧪', price: 50,  kind: 'mid' },
-  cement:     { name: 'Цемент',      icon: '🧱', price: 20,  kind: 'mid' },
-  concrete:   { name: 'Бетон',       icon: '🏗️', price: 18,  kind: 'build' },
-  bricks:     { name: 'Кирпич',      icon: '🟥', price: 15,  kind: 'build' },
-  glass:      { name: 'Стекло',      icon: '🪟', price: 30,  kind: 'build' },
-  bread:      { name: 'Хлеб',        icon: '🍞', price: 40,  kind: 'retail', demand: 150 },
-  cheese:     { name: 'Сыр',         icon: '🧀', price: 70,  kind: 'retail', demand: 60 },
-  furniture:  { name: 'Мебель',      icon: '🛋️', price: 220, kind: 'retail', demand: 12 },
-  clothes:    { name: 'Одежда',      icon: '👕', price: 120, kind: 'retail', demand: 30 },
-  appliances: { name: 'Техника',     icon: '📺', price: 480, kind: 'retail', demand: 8 },
-  toys:       { name: 'Игрушки',     icon: '🧸', price: 90,  kind: 'retail', demand: 25 },
-};
+// Товары, рецепты и виды предприятий — в catalog.js
+export { GOODS, RECIPES, ENTERPRISES, GROUPS } from './catalog.js';
 
-// rate — выпуск в день при полном штате на 1-м уровне предприятия.
-export const RECIPES = {
-  grain:      { ent: 'farm',     rate: 360, inputs: {} },
-  milk:       { ent: 'farm',     rate: 240, inputs: {} },
-  cotton:     { ent: 'farm',     rate: 270, inputs: {} },
-  wood:       { ent: 'forestry', rate: 300, inputs: {} },
-  ore:        { ent: 'mine',     rate: 225, inputs: {} },
-  oil:        { ent: 'mine',     rate: 180, inputs: {} },
-  stone:      { ent: 'mine',     rate: 300, inputs: {} },
-  sand:       { ent: 'mine',     rate: 360, inputs: {} },
-  flour:      { ent: 'factory',  rate: 180, inputs: { grain: 2 } },
-  bread:      { ent: 'factory',  rate: 180, inputs: { flour: 1 } },
-  cheese:     { ent: 'factory',  rate: 75,  inputs: { milk: 3 } },
-  lumber:     { ent: 'factory',  rate: 150, inputs: { wood: 2 } },
-  steel:      { ent: 'factory',  rate: 75,  inputs: { ore: 3 } },
-  fabric:     { ent: 'factory',  rate: 135,  inputs: { cotton: 2 } },
-  plastic:    { ent: 'factory',  rate: 90,  inputs: { oil: 2 } },
-  furniture:  { ent: 'factory',  rate: 38,  inputs: { lumber: 4, steel: 1 } },
-  clothes:    { ent: 'factory',  rate: 68,  inputs: { fabric: 2 } },
-  appliances: { ent: 'factory',  rate: 22,  inputs: { steel: 2, plastic: 2 } },
-  toys:       { ent: 'factory',  rate: 90,  inputs: { plastic: 0.5, fabric: 0.5 } },
-  cement:     { ent: 'factory',  rate: 150, inputs: { stone: 2 } },
-  concrete:   { ent: 'factory',  rate: 240, inputs: { cement: 0.5, sand: 1 } },
-  bricks:     { ent: 'factory',  rate: 200, inputs: { stone: 1, sand: 0.5 } },
-  glass:      { ent: 'factory',  rate: 120, inputs: { sand: 2 } },
-};
-
-export const ENTERPRISES = {
-  farm:      { name: 'Ферма',       icon: '🚜', cost: 30000, workers: 20, upkeep: 80,  storage: 3000,  desc: 'Зерно, хлопок, молоко.' },
-  forestry:  { name: 'Лесхоз',      icon: '🌲', cost: 25000, workers: 15, upkeep: 60,  storage: 3000,  desc: 'Заготовка древесины.' },
-  mine:      { name: 'Карьер',      icon: '⛏️', cost: 60000, workers: 25, upkeep: 150, storage: 3000,  desc: 'Руда, нефть, камень, песок.' },
-  factory:   { name: 'Завод',       icon: '🏭', cost: 50000, workers: 30, upkeep: 200, storage: 4000,  desc: 'Сырьё → полуфабрикаты → товары.' },
-  warehouse: { name: 'Склад',       icon: '📦', cost: 20000, workers: 5,  upkeep: 50,  storage: 20000, desc: 'Хранение и перевалка.' },
-  lab:       { name: 'НИИ',         icon: '🔬', cost: 70000, workers: 12, upkeep: 200, storage: 0,     desc: 'Технологии — качество товаров.' },
-  construction: { name: 'Строительная компания', icon: '👷', cost: 60000, workers: 40, upkeep: 150, storage: 8000, desc: 'Строит ваши здания своими силами из ваших стройматериалов.' },
-  shop:      { name: 'Магазин',     icon: '🏬', cost: 30000, workers: 10, upkeep: 100, storage: 2000,  desc: 'Открывается в коммерческом помещении жилого дома в городе.' },
-};
 
 export const MARKET_SALARY = 20;        // средняя зарплата, ₽ в день
 export const IMPORT_MARKUP = 1.15;      // закупка на оптовом рынке дороже базовой цены
@@ -79,6 +18,7 @@ export const DEPOT = {
   build:  { start: 6000, restock: 60 },
   retail: { start: 400,  restock: 10 },
 };
+// Блюда и услуги на складах не продаются — их делают на месте
 
 // ---------- Город ----------
 
@@ -141,7 +81,7 @@ export const START_MONEY = 250000;
 export const HQ = {
   staff:  { name: 'Отдел персонала',        label: 'Сотрудников',            limit: l => 250 * 2 ** (l - 1) },
   manage: { name: 'Управляющий отдел',      label: 'Предприятий',            limit: l => 6 + 3 * (l - 1) },
-  prod:   { name: 'Производственный отдел', label: 'Производимые продукты',  limit: l => 4 + 2 * (l - 1) },
+  prod:   { name: 'Производственный отдел', label: 'Производимые продукты',  limit: l => 6 + 3 * (l - 1) },
   build:  { name: 'Строительный отдел',     label: 'Одновременных строек',   limit: l => 2 + (l - 1) },
 };
 export const HQ_MAX = 10;
@@ -163,8 +103,9 @@ export const PLAYER_COLOR = '#3b82f6';
 
 // Специалисты: у каждого вида предприятий — своя профессия
 export const PROFESSIONS = {
-  farm: 'Агроном', forestry: 'Лесничий', mine: 'Горный мастер', factory: 'Начальник цеха',
-  warehouse: 'Кладовщик', lab: 'Учёный', shop: 'Продавец', construction: 'Прораб',
+  shop: 'Продавец', warehouse: 'Кладовщик', factory: 'Начальник цеха', sawmill: 'Лесоруб', livestock: 'Зоотехник',
+  cropfarm: 'Агроном', greenhouse: 'Тепличник', restaurant: 'Шеф-повар', salon: 'Мастер красоты', autoservice: 'Автомеханик',
+  construction: 'Прораб', mine: 'Горный мастер', oilwell: 'Буровой мастер', lab: 'Учёный',
 };
 export const SPEC_NAMES = {
   m: ['Николай Крутов', 'Илья Федотов', 'Георгий Трубленков', 'Вячеслав Краснов', 'Андрей Соколов', 'Павел Орлов', 'Дмитрий Зайцев',
@@ -186,7 +127,7 @@ export const EVENTS = [
   { goods: ['grain', 'cotton', 'milk'], kind: 'price', mult: 1.35, text: g => `Неурожай! ${g} дорожает` },
   { goods: ['wood', 'ore', 'oil', 'grain'], kind: 'price', mult: 0.7, text: g => `Перепроизводство: ${g} дешевеет` },
   { goods: ['steel', 'plastic', 'fabric', 'lumber', 'flour'], kind: 'price', mult: 1.3, text: g => `Дефицит на рынке: ${g} дорожает` },
-  { goods: ['bread', 'cheese', 'clothes', 'toys', 'furniture', 'appliances'], kind: 'demand', mult: 1.6, text: g => `Горожане скупают товар «${g}»` },
+  { goods: ['bread', 'cheese', 'tshirt', 'toys', 'furniture', 'tv', 'pizza', 'haircut'], kind: 'demand', mult: 1.6, text: g => `Горожане скупают товар «${g}»` },
   { salary: 1.1, text: 'Профсоюзы добились роста зарплат' },
 ];
 

@@ -7,6 +7,7 @@ import {
 import * as G from './game.js';
 import * as P from './production.js';
 import { CATS } from './ledger.js';
+import { entDef, defOf, recipesFor, sellsList, accepts, producers, GROUPS } from './catalog.js';
 
 const $ = s => document.querySelector(s);
 const esc = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -19,7 +20,7 @@ const qBadge = q => {
 };
 const stars = q => '★'.repeat(q) + '☆'.repeat(5 - q);
 const goodName = g => `${GOODS[g].icon} ${GOODS[g].name}`;
-const entName = e => `${ENTERPRISES[e.type].icon} ${esc(e.name)}`;
+const entName = e => `${entDef(e).icon} ${esc(e.name)}`;
 const bTitle = b => `${BUILDINGS[b.type].icon} ${BUILDINGS[b.type].name} №${b.id}`;
 const ownerName = (s, b) => (b.owner === 'player' ? esc(s.company) : esc(RIVALS[b.owner].name));
 const ownerColor = b => (b.owner === 'player' ? '#3b82f6' : RIVALS[b.owner].color);
@@ -43,10 +44,9 @@ function canvas2d(c) {
 }
 // Группы товаров для «Товарооборота»
 function goodGroups() {
-  const g = { 'Сельскохозяйственная продукция': ['grain', 'milk', 'cotton'], 'Полезные ископаемые': ['wood', 'ore', 'oil', 'stone', 'sand'],
-    'Материалы': ['flour', 'lumber', 'steel', 'fabric', 'plastic', 'cement'], 'Строительные материалы': ['concrete', 'bricks', 'glass'],
-    'Продукты питания': ['bread', 'cheese'], 'Товары народного потребления': ['furniture', 'clothes', 'appliances', 'toys'] };
-  return g;
+  const out = {};
+  for (const g in GOODS) (out[GROUPS[GOODS[g].group]] ||= []).push(g);
+  return out;
 }
 function gameDate(day) {
   const d = new Date(Date.UTC(2001, 0, day));
@@ -128,15 +128,19 @@ export class UI {
   }
 
   entProblem(e) {
-    const s = this.s;
-    if (e.target === 0) return 'Нет сотрудников';
+    const s = this.s, d = entDef(e);
+    if (P.targetOf(e) === 0) return 'Нет сотрудников';
     if (e.salary < s.marketSalary * 0.7) return 'Низкая зарплата — люди увольняются';
-    if (e.type === 'shop' && !Object.keys(e.stock).some(g => GOODS[g].kind === 'retail')) return 'Нечего продавать — настройте поставку или закупку';
+    if (d.sells && !e.host) return 'Нет помещения';
+    if (d.goods && !d.goods.some(g => e.stock[g])) return 'Нечего продавать — настройте снабжение';
     if (e.type === 'lab' && !e.research) return 'Не выбрано исследование';
     if (e.type === 'construction' && !Object.values(s.buildings).some(b => b.builder === e.id && b.state === 'build')) return 'Нет строек — закажите здание «своими силами»';
-    if (ENTERPRISES[e.type].storage && P.freeSpace(e) <= 0) return 'Склад переполнен';
-    const info = P.productionInfo(s, e);
-    if (info && info.limitBy && (e.last.produced[e.recipe] || 0) < info.maxOut * 0.3 && s.day > e.built + 1) return `Не хватает сырья: ${GOODS[info.limitBy].name}`;
+    if (d.storage && P.freeSpace(e) <= 0) return 'Склад переполнен';
+    if (P.wearOf(e) > 0.6) return 'Оборудование изношено — нужен ремонт';
+    if (s.day > e.built + 1) for (const x of e.divs) {
+      const info = P.divInfo(s, e, x);
+      if (info && info.limitBy && (e.last.produced[x.recipe] || 0) < info.maxOut * 0.3) return `Производство остановлено из-за недостатка сырья: ${GOODS[info.limitBy].name}`;
+    }
     return null;
   }
 
@@ -149,10 +153,9 @@ export class UI {
     this.renderSide(true);
   }
   selectEnt(id) {
-    if (this.sel?.kind !== 'ent' || this.sel.id !== id) this.tab = 'main';
-    this.sel = { kind: 'ent', id };
-    $('#side').hidden = false;
-    this.renderSide(true);
+    if (this.entId !== id) this.entTab = 'main';
+    this.entId = id;
+    this.openPage('ent');
   }
 
   renderSide(force = false) {
@@ -162,11 +165,7 @@ export class UI {
     const top = side.scrollTop;
     const s = this.s;
     let html = '<button class="x" data-act="close">✕</button>';
-    if (this.sel.kind === 'ent') {
-      const e = s.enterprises[this.sel.id];
-      if (!e) { this.app.select(null); return; }
-      html += this.entHtml(e);
-    } else {
+    {
       const { i, j } = this.sel;
       const b = G.buildingAt(s, i, j);
       if (!b) html += this.orderHtml(s.plots[G.key(i, j)]);
@@ -319,10 +318,10 @@ export class UI {
     if (!b.units.comm || P.shopSlots(s, b) <= 0) return '';
     const own = b.owner === 'player';
     const free = b.units.comm.total - b.units.comm.occ - P.shopsIn(s, b).length;
-    return `<div class="box"><h4>Свой магазин здесь</h4>
+    return `<div class="box"><h4>Своя точка продаж здесь</h4>
       <p class="hint">${own ? (free > 0 ? 'Есть свободное помещение — аренду платить не нужно.' : 'Свободных помещений нет: один арендатор съедет.') : `Аренда ${fmt(b.units.comm.rent)}/день владельцу дома.`}
       Открытие: ${fmt(ENTERPRISES.shop.cost)}.</p>
-      <button class="btn primary" data-act="openshop" ${s.money < ENTERPRISES.shop.cost ? 'disabled' : ''}>🏬 Открыть магазин</button></div>`;
+      <button class="btn primary" data-act="openshop">🏬 Открыть здесь магазин, ресторан, салон…</button></div>`;
   }
 
   rivalBuildingHtml(b) {
@@ -333,149 +332,270 @@ export class UI {
     return h + this.openShopHtml(b);
   }
 
-  // ---------- предприятие ----------
-  entHtml(e) {
-    const s = this.s, d = ENTERPRISES[e.type];
-    const tabs = [['main', 'Обзор']];
-    if (d.storage) tabs.push(['stock', 'Склад']);
-    if (e.type === 'shop') tabs.push(['prices', 'Цены']);
+  // ---------- страница предприятия (как «Пищевой завод» в Бизмании) ----------
+  entTabs(e) {
+    const d = entDef(e), makes = recipesFor(e.type, e.sub).length && !d.goods;
+    const tabs = [['main', d.typeName]];
+    if (makes) tabs.push(['prod', 'Производство']);
+    if (e.type !== 'lab') tabs.push(['supply', 'Снабжение']);
+    if (!['lab', 'construction'].includes(e.type)) tabs.push(['sales', d.sells ? 'Сбыт и цены' : 'Сбыт']);
     if (e.type === 'lab') tabs.push(['lab', 'Исследования']);
-    else tabs.push(['supply', 'Поставки']);
     if (e.type === 'construction') tabs.push(['sites', 'Стройки']);
-    if (!tabs.some(t => t[0] === this.tab)) this.tab = 'main';
+    tabs.push(['divs', 'Подразделения'], ['reports', 'Отчёты']);
+    return tabs;
+  }
+
+  page_ent(s) {
+    const e = s.enterprises[this.entId];
+    if (!e) return this.page_company(s);
+    const d = entDef(e), tabs = this.entTabs(e);
+    if (!tabs.some(t => t[0] === this.entTab)) this.entTab = 'main';
     const host = e.host && s.buildings[e.host];
-    let h = `<h2>${d.icon} ${esc(e.name)} <span class="lvl">ур. ${e.level}</span></h2>
-      <div class="sub">${d.name}${host ? ` · в доме №${host.id} (участок ${host.i}:${host.j})` : ' · виртуальное предприятие'} · с ${e.built}-го дня</div>
-      <div class="tabs">${tabs.map(([k, n]) => `<button data-act="tab" data-tab="${k}" class="${this.tab === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
     const prob = this.entProblem(e);
-    if (prob) h += `<div class="warn">⚠️ ${esc(prob)}</div>`;
-    return h + this[`et_${this.tab}`](e);
+    return `<div class="page-title"><span class="big">${d.icon}</span>
+        <div><div class="enav"><button class="btn small" data-act="entnav" data-dir="-1" title="Предыдущее">◀</button><button class="btn small" data-act="entnav" data-dir="1" title="Следующее">▶</button>
+          <h1>${esc(e.name)}</h1></div>
+          <div class="hint">Компания: <a href="#" data-act="cotabgo" data-k="main">${esc(s.company)}</a> · ${d.name}${host ? ` · <a href="#" data-act="goplot" data-i="${host.i}" data-j="${host.j}">дом №${host.id}</a>` : ' · виртуальное предприятие'}</div></div>
+        <div class="acts">${prob ? `<span class="probicon" title="${esc(prob)}">⛔</span>` : ''}<span class="hint">Город: 🏙️ ${esc(s.cityName)}</span>
+          <span class="star" title="Уровень предприятия (сумма уровней подразделений)">${P.levelOf(e)}</span></div></div>
+      <div class="ftabs">${tabs.map(([k, n]) => `<button data-act="enttab" data-k="${k}" class="${this.entTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+      ${prob ? `<div class="warn">⚠️ ${esc(prob)}</div>` : ''}${this[`ep_${this.entTab}`](e, s)}`;
   }
 
-  et_main(e) {
-    const s = this.s, d = ENTERPRISES[e.type];
-    const max = P.maxWorkers(e), eff = P.salaryEff(s, e), profit = e.last.revenue - e.last.expense;
-    let h = `<div class="box"><h4>Вчера</h4><div class="kv"><span>Выручка</span><span class="pos">${fmt(e.last.revenue)}</span>
-      <span>Расходы</span><span class="neg">${fmt(e.last.expense)}</span><span>Прибыль</span><span class="${profit >= 0 ? 'pos' : 'neg'}">${fmt(profit)}</span></div></div>`;
-    const recipes = Object.keys(RECIPES).filter(r => RECIPES[r].ent === e.type);
-    if (recipes.length) {
-      const r = RECIPES[e.recipe], info = P.productionInfo(s, e);
-      const inputs = Object.entries(r.inputs).map(([g, k]) => `${k} × ${goodName(g)} (есть ${num(P.stockQty(e, g))})`).join('<br>') || 'не нужно';
-      h += `<div class="box"><h4>Производство</h4>
-        <div class="row"><select data-act="recipe">${recipes.map(x => `<option value="${x}" ${x === e.recipe ? 'selected' : ''}>${goodName(x)} — ${fmt(s.prices[x])}</option>`).join('')}</select></div>
-        <div class="kv"><span>Сырьё на 1 шт.</span><span>${inputs}</span><span>Мощность</span><span>${num(info.maxOut)} шт./день</span>
-        <span>Выпущено вчера</span><span>${num(e.last.produced[e.recipe] || 0)} шт.</span>
-        <span>Технология</span><span>ур. ${s.tech[e.recipe]} → качество ${qBadge(P.techQuality(s, e.recipe))}</span></div></div>`;
-    }
-    if (e.type === 'construction') {
-      const crew = (e.workers / max) * eff * (1 + 0.5 * (e.level - 1));
-      h += `<div class="box"><h4>Бригада</h4><div class="kv"><span>Скорость</span><span>${crew.toFixed(2)} дня стройки за день</span></div>
-        <p class="hint">Закупайте стройматериалы на вкладке «Склад» или везите со своих заводов. Несколько строек делят бригаду.</p></div>`;
-    }
-    h += `<div class="box"><h4>Персонал</h4>
-      <div class="row"><label>Штат</label><input type="range" min="0" max="${max}" value="${e.target}" data-act="target"><b>${e.workers}/${e.target}</b></div>
-      <div class="row"><label>Зарплата</label><input type="number" min="1" value="${e.salary}" data-act="salary"> ₽/день <span class="hint">средняя ${s.marketSalary}</span></div>
-      <div class="kv"><span>Эффективность</span><span>${pct(eff)}</span><span>Фонд оплаты</span><span>${fmt(e.workers * e.salary)}/день</span>
-      <span>Содержание</span><span>${fmt(d.upkeep * e.level)}/день</span>
-      ${e.type === 'shop' && P.hostRent(s, e) ? `<span>Аренда помещения</span><span>${fmt(P.hostRent(s, e))}/день</span>` : ''}
-      ${d.storage ? `<span>Склад</span><span>${num(P.stockTotal(e))} / ${num(P.capacity(e))}</span>` : ''}</div></div>
-      <div class="row"><label>Название</label><input type="text" value="${esc(e.name)}" data-act="ename" maxlength="40" style="flex:1"></div>
-      <div class="actions">
-        ${e.level < 3 ? `<button class="btn primary" data-act="eupgrade" ${s.money < P.upgradeCost(e) ? 'disabled' : ''}>⬆ Расширить (${fmt(P.upgradeCost(e))})</button>` : ''}
-        ${e.host ? `<button class="btn" data-act="gohost">📍 Показать дом</button>` : ''}
-        <button class="btn danger" data-act="eclose">Закрыть (${fmt(e.invested * 0.4)})</button></div>`;
-    return h;
+  ep_main(e, s) {
+    const d = entDef(e), w = weekOf(e.hist), fl = P.entFlow(e);
+    const fill = d.storage ? P.stockTotal(e) / P.capacity(e) : 0, wear = P.wearOf(e);
+    const own = Object.values(fl).reduce((a, x) => a + (x.shipped || 0), 0), sold = Object.values(fl).reduce((a, x) => a + (x.sold || 0), 0);
+    let stockVal = 0;
+    for (const g in e.stock) stockVal += e.stock[g].qty * s.prices[g] * 0.6;
+    const sp = P.specOf(s, e), eff = Math.min(1, (P.workersOf(e) / Math.max(1, P.maxWorkers(e))) * P.salaryEff(s, e) * P.specBonus(s, e) * (1 - wear / 2));
+    const goods = [...new Set([...e.divs.map(x => x.recipe).filter(Boolean), ...Object.keys(e.stock)])].slice(0, 14);
+    const slots = Array.from({ length: P.MAX_DIVS }, (_, n) => e.divs[n]);
+    return `<div class="co-grid">
+      <div>
+        <div class="row big2"><span title="Рабочие">👷 ${num(P.workersOf(e))}</span><span title="Оборудование">🛠️ ${P.levelOf(e) * 10}</span></div>
+        ${d.storage ? `<div class="row"><label>Склад</label><span class="effbar wide"><i style="width:${Math.round(fill * 100)}%"></i></span> ${pct(fill)}</div>` : ''}
+        <div class="row"><label>Износ оборудования</label><span class="effbar wide red"><i style="width:${Math.round(wear * 100)}%"></i></span> ${pct(wear)}</div>
+        <h4 class="sect">Структура сбыта (7 дней)</h4>
+        <div class="kv"><span>Своей компании</span><span>${num(own)} шт.</span><span>Другим</span><span>${num(sold)} шт.</span></div>
+        <div class="gicons">${goods.map(g => `<span title="${GOODS[g].name}: ${num(P.stockQty(e, g))} на складе">${GOODS[g].icon}<i style="height:${Math.min(100, (P.stockQty(e, g) / Math.max(1, P.capacity(e) / 4)) * 100)}%"></i></span>`).join('')}</div>
+      </div>
+      <div class="co-center">
+        <div class="chart-box"><canvas class="chart" id="echart"></canvas></div>
+        <div class="statlist"><span>Наличные компании:</span><span>${fmt(s.money)}</span><span>Выручка (7 дн.):</span><span>${fmt(w.rev)}</span>
+          <span>Прибыль (7 дн.):</span><span class="${w.rev - w.exp >= 0 ? 'pos' : 'neg'}">${fmt(w.rev - w.exp)}</span><span>Активы:</span><span>${fmt(e.invested * 0.6 + stockVal)}</span></div>
+      </div>
+      <div class="profile">${sp ? `<div class="ava sm">${sp.face}</div>${esc(sp.name)}<br>${sp.prof} · ур. ${sp.level}` : `<div class="ava sm">❔</div>Начальник не назначен<br><a href="#" data-act="cotabgo" data-k="staff">нанять специалиста</a>`}
+        <div style="margin-top:8px">Эффективность: <span class="eff"><i style="width:${Math.round(eff * 100)}%"></i></span> ${pct(eff)}</div></div>
+    </div>
+    <div class="iso">${slots.map(x => x
+      ? `<button class="isotile" data-act="enttab-go" data-k="divs" title="${esc(P.divName(e, x))}"><span>${d.icon}</span><span class="star sm">${x.level}</span>${x.recipe ? `<b>${GOODS[x.recipe].icon}</b>` : ''}${x.on ? '' : '<em>выкл.</em>'}</button>`
+      : `<button class="isotile empty" data-act="adddiv" title="Новое подразделение — ${fmt(P.divCost(e))}"><span>➕</span></button>`).join('')}</div>
+    <div class="actions"><input type="text" value="${esc(e.name)}" data-act="ename" maxlength="40" style="width:240px">
+      <button class="btn danger" data-act="eclose">Закрыть предприятие (${fmt(e.invested * 0.4)})</button></div>`;
   }
 
-  et_stock(e) {
+  ep_prod(e, s) {
+    const options = recipesFor(e.type, e.sub);
+    return `<table class="grid"><tr><th>Подразделение</th><th>Уровень</th><th>Оборудование</th><th>Технологии</th><th>Продукция</th><th class="r">Качество</th><th>Сырьё</th><th>Эффективность</th><th class="r">Себест.</th><th>Работает</th></tr>
+      ${e.divs.map(x => {
+        const r = RECIPES[x.recipe], info = P.divInfo(s, e, x), st = e.stock[x.recipe];
+        const eff = info?.maxOut ? Math.min(1, (e.last.produced[x.recipe] || 0) / Math.max(1, info.maxOut)) : 0;
+        return `<tr><td><span class="ico">${entDef(e).icon}</span> ${esc(P.divName(e, x))}</td><td><span class="star sm">${x.level}</span></td>
+          <td>🛠️ ${x.level * 10} &nbsp; 👷 ${x.workers}</td><td><span class="tech">${x.recipe ? s.tech[x.recipe] : '—'}</span></td>
+          <td><select data-act="divrecipe" data-d="${x.id}">${options.map(g => `<option value="${g}" ${g === x.recipe ? 'selected' : ''}>${GOODS[g].icon} ${GOODS[g].name}</option>`).join('')}</select>
+            <span class="hint">${num(e.last.produced[x.recipe] || 0)} / ${num(info?.maxOut || 0)}</span></td>
+          <td class="r">${st ? st.q.toFixed(2) : '—'}</td>
+          <td class="prods sm">${r ? Object.entries(r.inputs).map(([g, k]) => `<span title="${GOODS[g].name}: нужно ${k} на 1 шт., на складе ${num(P.stockQty(e, g))}" class="${info?.limitBy === g ? 'neg' : ''}">${GOODS[g].icon}<small>${num(P.stockQty(e, g))}</small></span>`).join('') || '—' : '—'}</td>
+          <td><span class="effbar"><i style="width:${Math.round(eff * 100)}%"></i></span></td><td class="r">${st ? fmt(st.c) : '—'}</td>
+          <td><label class="switch"><input type="checkbox" data-act="divon" data-d="${x.id}" ${x.on ? 'checked' : ''}><i></i></label></td></tr>`;
+      }).join('')}</table>
+      <div class="actions"><button class="btn primary" data-act="adddiv" ${e.divs.length >= P.MAX_DIVS ? 'disabled' : ''}>➕ Новое подразделение (${fmt(P.divCost(e))})</button>
+        <span class="hint">Подразделений: ${e.divs.length} / ${P.MAX_DIVS}. Технологии повышает лаборатория.</span></div>`;
+  }
+
+  ep_supply(e, s) {
+    const need = P.inputNeeds(s, e), fl = P.entFlow(e);
+    const incoming = s.contracts.filter(c => c.to === e.id);
+    const shopNeed = entDef(e).sells ? Object.fromEntries(Object.entries(fl).map(([g, x]) => [g, (x.sold || 0) / 7])) : {};
+    const goods = [...new Set([...Object.keys(need), ...Object.keys(e.buy), ...incoming.map(c => c.good), ...Object.keys(shopNeed)])].filter(g => GOODS[g]);
+    const total = goods.reduce((a, g) => a + (e.buy[g] || 0) * P.buyPrice(s, g), 0);
+    const can = Object.keys(GOODS).filter(g => !goods.includes(g) && accepts(e, g) && P.inDepot(g));
+    return `<table class="grid"><tr><th>Продукт</th><th class="r">Требуется/день</th><th class="r">На складе</th><th class="r">Кач-во</th><th class="r">Себест.</th>
+        <th class="r">Закуплено (7 дн.)</th><th class="r">Поставки/день</th><th>Закупать/день</th><th class="r">Сумма/день</th><th></th></tr>
+      ${goods.map(g => {
+        const st = e.stock[g], inc = incoming.filter(c => c.good === g).reduce((a, c) => a + c.qty, 0);
+        return `<tr><td>${goodName(g)}</td><td class="r">${num(need[g] || shopNeed[g] || 0)}</td><td class="r">${num(st?.qty || 0)}</td><td class="r">${st ? st.q.toFixed(2) : '—'}</td>
+          <td class="r">${st ? fmt(st.c) : '—'}</td><td class="r">${num(fl[g]?.bought || 0)}</td><td class="r">${num(inc)}</td>
+          <td><input type="number" min="0" value="${Math.round(e.buy[g] || 0)}" data-act="buyqty" data-good="${g}" ${e.autoSupply?.on && need[g] ? 'disabled' : ''} style="width:80px"> <span class="hint">по ${P.buyPrice(s, g)} ₽</span></td>
+          <td class="r">${fmt((e.buy[g] || 0) * P.buyPrice(s, g))}</td><td>${e.buy[g] != null ? `<button class="btn small" data-act="buydel" data-good="${g}">✕</button>` : ''}</td></tr>`;
+      }).join('') || '<tr><td colspan="10" class="hint">Сырьё не требуется. Добавьте закупку ниже.</td></tr>'}
+      <tr><td colspan="8" class="r"><b>Итого, сумма закупки в день:</b></td><td class="r"><b>${fmt(total)}</b></td><td></td></tr></table>
+      <div class="row"><select id="buyGood">${can.map(g => `<option value="${g}">${goodName(g)} — ${P.buyPrice(s, g)} ₽, на складах ${num(s.depot[g])}</option>`).join('')}</select>
+        <input type="number" id="buyQty" min="1" value="100"><button class="btn small primary" data-act="buyadd">Добавить закупку</button></div>
+      ${Object.keys(need).length ? `<label class="row"><input type="checkbox" data-act="autosupply" ${e.autoSupply?.on ? 'checked' : ''}> Авторегулирование снабжения — держать сырьё на
+        <input type="range" min="1" max="14" value="${e.autoSupply?.days || 3}" data-act="autodays" style="max-width:140px"> <b>${e.autoSupply?.days || 3} дн.</b></label>` : ''}
+      <p class="hint">Закупки — с универсальных складов города (запасы ограничены). Поставки от своих предприятий настраиваются на вкладке «Сбыт» у поставщика.</p>
+      ${incoming.length ? `<h3>Входящие поставки</h3>${this.contractRows(incoming, 'from')}` : ''}`;
+  }
+
+  contractRows(list, side) {
     const s = this.s;
-    const goods = Object.keys(e.stock);
-    let h = `<div class="kv"><span>Заполнено</span><span>${num(P.stockTotal(e))} / ${num(P.capacity(e))}</span></div>
-      <div class="bar"><i style="width:${Math.min(100, (P.stockTotal(e) / P.capacity(e)) * 100)}%"></i></div>`;
-    if (!goods.length) h += '<p class="hint">Склад пуст.</p>';
-    else {
-      h += `<table><tr><th>Товар</th><th class="r">Кол-во</th><th>Кач.</th><th class="r">Опт</th><th></th></tr>`;
-      for (const g of goods) {
-        const st = e.stock[g];
-        h += `<tr><td>${goodName(g)}</td><td class="r">${num(st.qty)}</td><td>${qBadge(st.q)}</td><td class="r">${P.sellPrice(s, g, st.q)}</td>
-          <td><button class="btn small" data-act="sell" data-good="${g}">Продать</button></td></tr>`;
-      }
-      h += '</table>';
+    return `<table class="grid"><tr><th>${side === 'from' ? 'От кого' : 'Кому'}</th><th>Товар</th><th class="r">В день</th><th></th></tr>
+      ${list.map(c => { const o = s.enterprises[side === 'from' ? c.from : c.to]; return `<tr><td><a href="#" data-act="openent" data-id="${o.id}">${entName(o)}</a></td><td>${goodName(c.good)}</td>
+        <td class="r">${num(c.qty)}</td><td><button class="btn small" data-act="cdel" data-id="${c.id}">✕</button></td></tr>`; }).join('')}</table>`;
+  }
+
+  ep_sales(e, s) {
+    const d = entDef(e), fl = P.entFlow(e), sellers = d.sells ? sellsList(e.type, e.sub) : [];
+    const goods = [...new Set([...e.divs.map(x => x.recipe).filter(Boolean), ...Object.keys(e.stock), ...sellers.filter(g => fl[g])])].filter(g => GOODS[g]);
+    const outgoing = s.contracts.filter(c => c.from === e.id);
+    const others = Object.values(s.enterprises).filter(x => x.id !== e.id);
+    const totRev = goods.reduce((a, g) => a + (fl[g]?.rev || 0), 0);
+    let h = `<table class="grid"><tr><th>Товар</th><th class="r">Объём продаж</th><th class="r">Выручка</th><th class="r">Произведено</th><th class="r">Использовано</th>
+        <th class="r">На складе</th><th class="r">Кач-во</th><th class="r">Себест.</th><th>${d.sells ? 'Цена' : 'Опт / автопродажа'}</th></tr>
+      ${goods.map(g => {
+        const st = e.stock[g], f = fl[g] || {};
+        const priceCell = d.sells && sellers.includes(g)
+          ? `<input type="number" min="1" value="${e.prices[g] ?? GOODS[g].price}" data-act="price" data-good="${g}" style="width:80px"> <span class="hint">рынок ${Math.round(s.prices[g])}</span>`
+          : P.inDepot(g) ? `${P.sellPrice(s, g, st?.q)} ₽ <label><input type="checkbox" data-act="autosell" data-good="${g}" ${e.autoSell[g] ? 'checked' : ''}> авто</label>
+            ${st ? `<button class="btn small" data-act="sell" data-good="${g}">Продать</button>` : ''}` : '—';
+        return `<tr><td>${goodName(g)}</td><td class="r">${num(f.sold || 0)}</td><td class="r">${fmt(f.rev || 0)}</td><td class="r">${num(f.made || 0)}</td><td class="r">${num(f.used || 0)}</td>
+          <td class="r">${num(st?.qty || 0)}</td><td class="r">${st ? st.q.toFixed(2) : '—'}</td><td class="r">${st ? fmt(st.c) : '—'}</td><td>${priceCell}</td></tr>`;
+      }).join('') || '<tr><td colspan="9" class="hint">Пока нечего продавать.</td></tr>'}
+      <tr><td><b>Итого (7 дн.):</b></td><td></td><td class="r"><b>${fmt(totRev)}</b></td><td colspan="6"></td></tr></table>`;
+    if (d.sells) h += `<p class="hint">Покупателей больше в центре и когда в городе больше жителей. Дешевле рынка и качественнее конкурентов (качество ${NPC_QUALITY}) — больше продаж.
+      ${d.goods ? `Пропускная способность: ${num(P.workersOf(e) * SHOP_UNITS_PER_WORKER * P.salaryEff(s, e))} покупок в день.` : 'Услуги не хранятся, блюда портятся за ночь наполовину.'}</p>`;
+    h += `<h3>Поставки своим предприятиям</h3>${outgoing.length ? this.contractRows(outgoing, 'to') : '<p class="hint">Нет.</p>'}`;
+    const sendable = goods.filter(g => GOODS[g].kind !== 'service');
+    if (others.length && sendable.length) {
+      h += `<div class="row"><select id="cGood">${sendable.map(g => `<option value="${g}">${goodName(g)}</option>`).join('')}</select> →
+        <select id="cTo">${others.map(x => `<option value="${x.id}">${entName(x)}</option>`).join('')}</select>
+        <input type="number" id="cQty" min="1" value="100"> шт./день <button class="btn small primary" data-act="cadd">Создать поставку</button></div>
+        <p class="hint">Доставка ${String(TRANSPORT_PER_UNIT).replace('.', ',')} ₽ за единицу, каждое утро. Себестоимость переходит вместе с товаром.</p>`;
     }
-    if (e.type !== 'shop') {
-      const sellable = new Set([...goods, ...(e.recipe && RECIPES[e.recipe].ent === e.type ? [e.recipe] : [])]);
-      h += `<div class="box"><h4>Автопродажа на склады города</h4>
-        ${[...sellable].map(g => `<label class="row"><input type="checkbox" data-act="autosell" data-good="${g}" ${e.autoSell[g] ? 'checked' : ''}> ${goodName(g)} — продавать всё в конце дня</label>`).join('') || '<span class="hint">Нечего продавать</span>'}</div>`;
-    }
-    const allowed = g => (e.type === 'shop' ? GOODS[g].kind === 'retail' : e.type === 'construction' ? ['build', 'mid'].includes(GOODS[g].kind) : true);
-    h += `<div class="box"><h4>Закупка на универсальных складах (каждый день)</h4>
-      ${Object.keys(e.buy).map(g => `<div class="row">${goodName(g)} <input type="number" min="0" value="${e.buy[g]}" data-act="buyqty" data-good="${g}"> шт. по ${P.buyPrice(s, g)} ₽ <span class="hint">(на складах ${num(s.depot[g])})</span>
-        <button class="btn small" data-act="buydel" data-good="${g}">✕</button></div>`).join('')}
-      <div class="row"><select id="buyGood">${Object.keys(GOODS).filter(g => !e.buy[g] && allowed(g)).sort((a, b) => (GOODS[b].kind === 'build') - (GOODS[a].kind === 'build')).map(g => `<option value="${g}">${goodName(g)} — ${P.buyPrice(s, g)} ₽, есть ${num(s.depot[g])}</option>`).join('')}</select>
-      <input type="number" id="buyQty" min="1" value="100"><button class="btn small primary" data-act="buyadd">Добавить</button></div>
-      <p class="hint">Запасы складов ограничены и пополняются медленно; при дефиците цены растут. Качество — 2.0.</p></div>`;
     return h;
   }
 
-  et_supply(e) {
-    const s = this.s;
-    const out = s.contracts.filter(c => c.from === e.id), inc = s.contracts.filter(c => c.to === e.id);
-    const others = Object.values(s.enterprises).filter(x => x.id !== e.id && x.type !== 'lab');
-    const goods = [...new Set([...(e.recipe && RECIPES[e.recipe].ent === e.type ? [e.recipe] : []), ...Object.keys(e.stock)])];
-    const line = (c, other) => `<div class="row">${goodName(c.good)} · ${num(c.qty)} шт./день ${other}<button class="btn small" data-act="cdel" data-id="${c.id}">✕</button></div>`;
-    let h = `<div class="box"><h4>Отправляем</h4>${out.map(c => line(c, `→ ${entName(s.enterprises[c.to])}`)).join('') || '<span class="hint">Нет</span>'}</div>
-      <div class="box"><h4>Получаем</h4>${inc.map(c => line(c, `← ${entName(s.enterprises[c.from])}`)).join('') || '<span class="hint">Нет</span>'}</div>`;
-    if (!others.length) return h + '<p class="hint">Создайте ещё одно предприятие, чтобы возить товары между ними.</p>';
-    if (!goods.length) return h + '<p class="hint">Здесь пока нечего отправлять.</p>';
-    const info = P.productionInfo(s, e);
-    h += `<div class="box"><h4>Новая поставка</h4>
-      <div class="row"><label>Товар</label><select id="cGood">${goods.map(g => `<option value="${g}">${goodName(g)}</option>`).join('')}</select></div>
-      <div class="row"><label>Куда</label><select id="cTo">${others.map(x => `<option value="${x.id}">${ENTERPRISES[x.type].icon} ${esc(x.name)}</option>`).join('')}</select></div>
-      <div class="row"><label>Сколько</label><input type="number" id="cQty" min="1" value="${info?.maxOut || 100}"> шт./день</div>
-      <button class="btn primary" data-act="cadd">Создать поставку</button>
-      <p class="hint">Доставка: ${String(TRANSPORT_PER_UNIT).replace('.', ',')} ₽ за единицу. Поставки выполняются каждое утро.</p></div>`;
-    return h;
+  ep_divs(e, s) {
+    const d = entDef(e), sp = P.specOf(s, e);
+    return `<div class="row"><label>Зарплата персонала</label><input type="number" min="1" value="${e.salary}" data-act="salary"> ₽/день на человека
+        <span class="hint">средняя в городе ${s.marketSalary} ₽ · эффективность ${pct(P.salaryEff(s, e))}</span></div>
+      ${e.divs.map((x, n) => {
+        const max = P.divMax(e, x);
+        return `<div class="divcard"><div class="dleft"><b>${esc(P.divName(e, x))}</b><div class="isotile sm">${d.icon}</div>
+            <div>Уровень ${x.level} ${x.level < P.MAX_DIV_LEVEL ? `<button class="btn small" data-act="updiv" data-d="${x.id}" title="Расширить: ${fmt(P.divUpgradeCost(e, x))}">⬆ ${fmtShort(P.divUpgradeCost(e, x))}</button>` : ''}
+            ${e.divs.length > 1 ? `<button class="btn small danger" data-act="rmdiv" data-d="${x.id}" title="Продать подразделение">✕</button>` : ''}</div></div>
+          <div><div class="row"><label>Сотрудники</label><input type="range" min="0" max="${max}" value="${x.target}" data-act="divtarget" data-d="${x.id}"> <b>${x.target}</b></div>
+            <div class="kv"><span>Работают</span><span>${x.workers} из ${max}</span><span>Фонд оплаты</span><span>${fmt(x.workers * e.salary)}/день</span></div></div>
+          <div><div class="row"><label>Загрузка</label><span class="effbar wide pink"><i style="width:${Math.round((x.workers / max) * 100)}%"></i></span></div>
+            <div class="row"><label>Эффективность</label><span class="effbar wide"><i style="width:${Math.round(Math.min(1, (x.workers / max) * P.salaryEff(s, e) * P.wearFactor(x)) * 100)}%"></i></span></div>
+            <div class="row"><label>Износ</label><span class="effbar wide red"><i style="width:${Math.round(x.wear * 100)}%"></i></span>
+              ${x.wear > 0.05 ? `<button class="btn small" data-act="repair" data-d="${x.id}">🔧 ${fmtShort(P.repairCost(e, x))}</button>` : ''}</div></div>
+          <div class="dprod">${x.recipe ? `<span class="big3">${GOODS[x.recipe].icon}</span>` : ''}${n === 0 ? `<div class="boss">${sp ? `<span class="face">${sp.face}</span><br>${esc(sp.name)}<br><span class="star sm">${sp.level}</span>` : '<span class="hint">без начальника</span>'}</div>` : ''}</div></div>`;
+      }).join('')}
+      <div class="actions"><button class="btn primary" data-act="adddiv" ${e.divs.length >= P.MAX_DIVS ? 'disabled' : ''}>➕ Новое подразделение (${fmt(P.divCost(e))})</button></div>
+      <p class="hint">Уровень подразделения увеличивает штат, выпуск и склад. Оборудование изнашивается — износ снижает выработку, ремонт его обнуляет.</p>`;
   }
 
-  et_prices(e) {
-    const s = this.s, host = s.buildings[e.host];
-    const loc = host ? s.plots[G.key(host.i, host.j)].loc : 1;
-    let h = `<div class="kv"><span>Район дома</span><span>${loc.toFixed(2)}</span><span>Жителей в городе</span><span>${num(s.city.population || 0)}</span>
-      <span>Пропускная способность</span><span>${num(e.workers * SHOP_UNITS_PER_WORKER * P.salaryEff(s, e))} покупок/день</span></div>
-      <table><tr><th>Товар</th><th class="r">Есть</th><th>Кач.</th><th class="r">Продано</th><th>Цена</th></tr>`;
-    for (const g of Object.keys(GOODS).filter(g => GOODS[g].kind === 'retail')) {
-      const st = e.stock[g];
-      h += `<tr><td>${goodName(g)}</td><td class="r">${num(st?.qty || 0)}</td><td>${st ? qBadge(st.q) : '—'}</td><td class="r">${num(e.last.sold[g] || 0)}</td>
-        <td><input type="number" min="1" value="${e.prices[g] ?? GOODS[g].price}" data-act="price" data-good="${g}" style="width:76px"></td></tr>`;
-    }
-    return h + `</table><p class="hint">У конкурентов цена ≈ рыночной, качество ${NPC_QUALITY}. Чем больше жителей в городе, тем больше покупателей.</p>`;
+  ep_reports(e) {
+    const h = e.hist.slice(-14), fl = P.entFlow(e, 14);
+    return `<div class="twocol"><div><h3>По дням</h3><table class="grid"><tr><th>День</th><th class="r">Выручка</th><th class="r">Расходы</th><th class="r">Прибыль</th></tr>
+      ${h.map((x, n) => ({ x, day: this.s.day - h.length + n })).reverse().map(({ x, day }) => `<tr><td>${shortDate(day)}</td><td class="r">${fmt(x.rev)}</td><td class="r">${fmt(x.exp)}</td>
+        <td class="r ${x.rev - x.exp < 0 ? 'neg' : ''}">${fmt(x.rev - x.exp)}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">Нет данных</td></tr>'}</table></div>
+      <div><h3>Товары за 14 дней</h3><table class="grid"><tr><th>Товар</th><th class="r">Куплено</th><th class="r">Получено</th><th class="r">Произведено</th><th class="r">Потреблено</th><th class="r">Отгружено</th><th class="r">Продано</th></tr>
+      ${Object.entries(fl).map(([g, x]) => `<tr><td>${goodName(g)}</td><td class="r">${num(x.bought || 0)}</td><td class="r">${num(x.received || 0)}</td><td class="r">${num(x.made || 0)}</td>
+        <td class="r">${num(x.used || 0)}</td><td class="r">${num(x.shipped || 0)}</td><td class="r">${num(x.sold || 0)}</td></tr>`).join('') || '<tr><td colspan="7" class="hint">Нет данных</td></tr>'}</table></div></div>`;
   }
 
-  et_lab(e) {
-    const s = this.s, cur = e.research;
+  ep_lab(e, s) {
+    const cur = e.research;
     let h = `<div class="box"><h4>Текущее исследование</h4>
       <select data-act="research"><option value="">— выберите —</option>${Object.keys(GOODS).map(g => `<option value="${g}" ${g === cur ? 'selected' : ''}>${goodName(g)} (ур. ${s.tech[g]})</option>`).join('')}</select>`;
     if (cur) {
-      const need = P.researchCost(s.tech[cur]), speed = e.workers * P.salaryEff(s, e) * e.level;
+      const need = P.researchCost(s.tech[cur]), speed = e.divs.reduce((a, x) => a + x.workers * x.level, 0) / 1.5 * P.salaryEff(s, e) * P.specBonus(s, e);
       h += `<div class="kv"><span>Прогресс</span><span>${num(e.progress)} / ${num(need)}</span><span>Скорость</span><span>${speed.toFixed(1)} очков/день</span>
         <span>Осталось</span><span>${speed > 0 ? Math.ceil((need - e.progress) / speed) + ' дн.' : '∞'}</span></div>
         <div class="bar"><i style="width:${(e.progress / need) * 100}%"></i></div>`;
     }
     return h + `</div><p class="hint">Каждый уровень технологии повышает качество товара на 0,8.</p>
-      <table><tr><th>Технология</th><th class="r">Уровень</th></tr>${Object.keys(GOODS).filter(g => s.tech[g] > 0).map(g => `<tr><td>${goodName(g)}</td><td class="r">${s.tech[g]}</td></tr>`).join('') || '<tr><td colspan="2" class="hint">Пока ничего не изучено</td></tr>'}</table>`;
+      <table class="grid"><tr><th>Технология</th><th class="r">Уровень</th></tr>${Object.keys(GOODS).filter(g => s.tech[g] > 0).map(g => `<tr><td>${goodName(g)}</td><td class="r">${s.tech[g]}</td></tr>`).join('') || '<tr><td colspan="2" class="hint">Пока ничего не изучено</td></tr>'}</table>`;
   }
 
-  et_sites(e) {
-    const s = this.s;
+  ep_sites(e, s) {
     const list = Object.values(s.buildings).filter(b => b.builder === e.id);
-    if (!list.length) return '<p class="hint">Строек нет. Выберите свободный участок на карте и в пункте «Кто строит» отметьте «Своими силами».</p>';
-    return list.map(b => `<div class="box"><div class="row"><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}">${bTitle(b)}</a>
-      <span class="hint">${b.state === 'done' ? 'достроен' : pct(b.progress / b.buildDays) + (b.paused ? ' · ⛔ стоит' : '')}</span></div>
-      ${b.state === 'build' ? `<div class="bar"><i style="width:${(b.progress / b.buildDays) * 100}%"></i></div>` : ''}</div>`).join('');
+    const crew = (P.workersOf(e) / Math.max(1, P.maxWorkers(e))) * P.salaryEff(s, e) * (1 + 0.5 * (P.levelOf(e) - 1)) * P.specBonus(s, e);
+    return `<div class="kv" style="max-width:480px"><span>Скорость бригады</span><span>${crew.toFixed(2)} дня стройки за день</span></div>` + (list.length
+      ? `<table class="grid"><tr><th>Объект</th><th class="r">Готовность</th><th>Статус</th></tr>${list.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}">${bTitle(b)}</a></td>
+        <td class="r">${b.state === 'done' ? 'достроен' : pct(b.progress / b.buildDays)}</td><td>${b.state === 'build' ? (b.paused ? '<span class="warn">⛔ стоит</span>' : 'идёт') : '✅'}</td></tr>`).join('')}</table>`
+      : '<p class="hint">Строек нет. Выберите свободный участок в городе и в пункте «Кто строит» отметьте «Своими силами».</p>')
+      + '<p class="hint">Закупайте стройматериалы на вкладке «Снабжение» или везите со своих заводов. Несколько строек делят бригаду.</p>';
+  }
+
+  drawEntChart() {
+    const c = $('#echart'), e = this.s.enterprises[this.entId];
+    if (!c || !e) return;
+    const { x, W, H } = canvas2d(c), h = e.hist.slice(-40);
+    x.fillStyle = '#f8f9fb'; x.fillRect(0, 0, W, H);
+    if (h.length < 2) { x.fillStyle = '#6b7280'; x.fillText('График появится через пару дней', 10, 20); return; }
+    const hi = Math.max(1, ...h.map(d => Math.max(d.rev, d.exp))), X = n => 4 + (n / (h.length - 1)) * (W - 8), Y = v => H - 16 - (v / hi) * (H - 26);
+    const gr = x.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, '#6d6ee8'); gr.addColorStop(1, '#b9bdf3');
+    x.fillStyle = gr; x.beginPath(); x.moveTo(X(0), Y(0)); h.forEach((d, n) => x.lineTo(X(n), Y(d.rev))); x.lineTo(X(h.length - 1), Y(0)); x.fill();
+    x.strokeStyle = '#4ade80'; x.lineWidth = 2; x.beginPath(); h.forEach((d, n) => (n ? x.lineTo(X(n), Y(d.exp)) : x.moveTo(X(n), Y(d.exp)))); x.stroke();
+    x.fillStyle = '#ef4444'; h.forEach((d, n) => { const p = d.rev - d.exp; if (p < 0) x.fillRect(X(n) - 1.5, Y(0), 3, Math.min(14, (-p / hi) * 40)); });
+  }
+
+  // ---------- создание предприятия ----------
+  page_create(s) {
+    const cr = this.cr ||= { step: 1 };
+    const L = G.companyLevel(s);
+    const lock = d => (d.later ? '<div class="later">Эта сфера бизнеса в игре будет открыта позднее</div>'
+      : d.minLevel && L < d.minLevel ? `<div class="req">Для постройки предприятия требуется ${d.minLevel}-й уровень компании (у вас ${L})</div>` : '');
+    const locked = d => d.later || (d.minLevel && L < d.minLevel);
+    const icons = list => `<div class="ccicons">${list.map(g => `<span title="${GOODS[g].name}">${GOODS[g].icon}</span>`).join('')}</div>`;
+    const typeGoods = t => { const T = ENTERPRISES[t]; return [...new Set(T.subs ? Object.keys(T.subs).flatMap(sb => sellsList(t, sb).length ? sellsList(t, sb) : recipesFor(t, sb)) : (sellsList(t).length ? sellsList(t) : recipesFor(t)))]; };
+    let h = `<div class="page-title"><span class="big">🏗️</span><h1>Создание предприятия</h1>
+      <div class="acts"><span class="hint">Уровень компании: <span class="star sm">${L}</span> · предприятий ${Object.keys(s.enterprises).length} / ${hqLimit(s, 'manage')}</span></div></div>`;
+    if (cr.step === 1) {
+      h += `<div class="req2">Выберите тип предприятия</div><div class="ccards">`;
+      for (const t in ENTERPRISES) {
+        const T = ENTERPRISES[t];
+        const minCost = T.subs ? Math.min(...Object.values(T.subs).map(x => x.cost || T.cost)) : T.cost;
+        h += `<button class="ccard ${locked(T) ? 'locked' : ''}" data-act="crtype" data-k="${t}" ${T.later ? 'disabled' : ''}><span class="cicon">${T.icon}</span>
+          <div><b>${T.name}</b><small>${T.desc}</small><i>Инвестиции: от ${fmtShort(minCost)}</i>${lock(T)}${icons(typeGoods(t).slice(0, 26))}</div></button>`;
+      }
+      return h + '</div>';
+    }
+    const T = ENTERPRISES[cr.type];
+    if (cr.step === 2) {
+      h += `<div class="req2">${T.subsTitle || 'Выберите тип предприятия'}: ${T.name}</div><div class="ccards">`;
+      for (const sb in T.subs) {
+        const D = defOf(cr.type, sb);
+        const list = sellsList(cr.type, sb).length ? sellsList(cr.type, sb) : D.groups !== undefined ? Object.keys(GOODS).filter(g => P.inDepot(g) && (!D.groups || D.groups.includes(GOODS[g].group))) : recipesFor(cr.type, sb);
+        h += `<button class="ccard ${locked(D) ? 'locked' : ''}" data-act="crsub" data-k="${sb}"><span class="cicon">${T.icon}<em>${D.icon}</em></span>
+          <div><b>${D.name}</b><small>${D.desc}</small><i>Инвестиции: от ${fmtShort(D.cost)}</i>${lock(D)}${icons(list.slice(0, 40))}</div></button>`;
+      }
+      return h + `</div><div class="actions"><button class="btn" data-act="crback">⏪ Назад</button></div>`;
+    }
+    // шаг 3: подтверждение
+    const D = defOf(cr.type, cr.sub);
+    const options = recipesFor(cr.type, cr.sub);
+    const hosts = D.sells ? P.shopHosts(s) : [];
+    const err = locked(D) ? 'Недостаточный уровень компании' : s.money < D.cost ? `Не хватает денег: нужно ${fmt(D.cost)}` : D.sells && !hosts.length ? 'Нет свободных коммерческих помещений' : null;
+    h += `<div class="ccard wide static"><span class="cicon">${T.icon}${cr.sub ? `<em>${D.icon}</em>` : ''}</span><div><b>${D.name}</b><small>${D.desc}</small>
+        <div class="kv" style="max-width:520px"><span>Инвестиции</span><span>${fmt(D.cost)}</span><span>Рабочих в подразделении</span><span>${D.workers}</span>
+        <span>Склад</span><span>${num(D.storage || 0)} ед.</span><span>Содержание</span><span>${fmt(D.upkeep)}/день</span></div>
+        <div class="row"><label>Название</label><input type="text" id="crName" maxlength="40" value="${esc(D.name)}" style="flex:1;max-width:320px"></div>
+        ${options.length && !D.goods ? `<div class="row"><label>Первый продукт</label><select id="crRecipe">${options.map(g => `<option value="${g}">${goodName(g)}${RECIPES[g].inputs && Object.keys(RECIPES[g].inputs).length ? ' ← ' + Object.keys(RECIPES[g].inputs).map(x => GOODS[x].icon).join('') : ''}</option>`).join('')}</select></div>` : ''}
+        ${D.sells ? (hosts.length ? `<div class="row"><label>Помещение</label><select id="crHost">${hosts.map(b => `<option value="${b.id}" ${b.id === cr.hostId ? 'selected' : ''}>Дом №${b.id} (участок ${b.i}:${b.j}, район ${s.plots[G.key(b.i, b.j)].loc.toFixed(2)}) — ${b.owner === 'player' ? 'ваш, без аренды' : 'аренда ' + b.units.comm.rent + ' ₽/день'}</option>`).join('')}</select></div>`
+          : '<p class="warn">Нужно коммерческое помещение на первом этаже жилого дома. Постройте жилой дом или дождитесь, пока конкуренты построят.</p>') : ''}
+        ${err ? `<p class="warn">${err}</p>` : ''}
+        <div class="actions"><button class="btn" data-act="crback">⏪ Назад</button><button class="btn primary" data-act="crcreate" ${err ? 'disabled' : ''}>Создать предприятие</button></div></div></div>`;
+    return h;
   }
 
   // ---------- действия ----------
-  curEnt() { return this.sel?.kind === 'ent' ? this.s.enterprises[this.sel.id] : null; }
+  curEnt() { return this.page === 'ent' ? this.s.enterprises[this.entId] : null; }
   curB() { return this.sel?.kind === 'plot' ? G.buildingAt(this.s, this.sel.i, this.sel.j) : null; }
 
   onClick(ev) {
@@ -497,45 +617,65 @@ export class UI {
       case 'sellb': if (confirm('Продать здание?')) { run(() => G.sell(s, b.id)); this.renderSide(true); } break;
       case 'openshop': {
         const host = b || G.buildingAt(s, this.sel.i, this.sel.j);
-        const r = run(() => P.createEnterprise(s, 'shop', host.id));
-        if (r?.enterprise) { this.toast('🏬 Магазин открыт! Настройте поставки или закупку товаров.'); this.app.selectEnt(r.enterprise.id); }
+        this.cr = { step: 1, hostId: host.id };
+        this.app.select(null);
+        this.openPage('create');
         break;
       }
+      case 'newent': this.cr = { step: 1 }; this.openPage('create'); break;
+      case 'crtype': {
+        const T = ENTERPRISES[t.dataset.k];
+        this.cr = { ...this.cr, type: t.dataset.k, sub: null, step: T.subs ? 2 : 3 };
+        this.renderPage(); $('#page').scrollTop = 0; break;
+      }
+      case 'crsub': this.cr = { ...this.cr, sub: t.dataset.k, step: 3 }; this.renderPage(); $('#page').scrollTop = 0; break;
+      case 'crback': this.cr.step = this.cr.step === 3 && ENTERPRISES[this.cr.type].subs ? 2 : 1; this.renderPage(); break;
+      case 'crcreate': {
+        const r = run(() => P.createEnterprise(s, this.cr.type, this.cr.sub, { level: G.companyLevel(s), name: $('#crName')?.value, recipe: $('#crRecipe')?.value, hostId: +$('#crHost')?.value }));
+        if (r?.enterprise) { this.toast(`${entDef(r.enterprise).icon} «${r.enterprise.name}» создано`); this.cr = { step: 1 }; this.app.selectEnt(r.enterprise.id); }
+        break;
+      }
+      case 'entnav': {
+        const ids = Object.keys(s.enterprises).map(Number);
+        if (ids.length) { const n = (ids.indexOf(this.entId) + +t.dataset.dir + ids.length) % ids.length; this.selectEnt(ids[n]); }
+        break;
+      }
+      case 'enttab': case 'enttab-go': this.entTab = t.dataset.k; this.renderPage(); break;
+      case 'cotabgo': ev.preventDefault(); this.openPage('company', t.dataset.k); break;
+      case 'adddiv': {
+        const r = run(() => P.addDivision(s, e));
+        if (r?.div) this.toast('➕ Новое подразделение');
+        this.renderPage(); break;
+      }
+      case 'updiv': run(() => P.upgradeDiv(s, e, e.divs.find(x => x.id === +t.dataset.d))); this.renderPage(); break;
+      case 'rmdiv': if (confirm('Продать подразделение? Вернётся 30% стоимости оборудования.')) { run(() => P.removeDiv(s, e, e.divs.find(x => x.id === +t.dataset.d))); this.renderPage(); } break;
+      case 'repair': run(() => P.repairDiv(s, e, e.divs.find(x => x.id === +t.dataset.d))); this.renderPage(); break;
       case 'openent': ev.preventDefault(); this.closeWin(); this.app.selectEnt(+t.dataset.id); break;
       case 'goplot': ev.preventDefault(); this.closeWin(); this.app.select(+t.dataset.i, +t.dataset.j, true); break;
-      case 'gohost': { const h = s.buildings[e.host]; this.app.select(h.i, h.j, true); break; }
-      case 'eupgrade': run(() => P.upgradeEnterprise(s, e.id)); this.renderSide(true); break;
       case 'eclose':
         if (confirm('Закрыть предприятие? Вернётся 40% вложений, товары на складе пропадут.')) {
           const v = this.app.act(() => P.closeEnterprise(s, e.id));
           this.toast(`Предприятие закрыто, получено ${fmt(v)}`);
-          this.app.select(null);
+          this.openPage('company', 'ent');
         }
         break;
       case 'sell': {
         const sum = this.app.act(() => P.sellToMarket(s, e, t.dataset.good, Infinity));
         if (sum) this.toast(`Продано на ${fmt(sum)}`);
-        this.renderSide(true); break;
+        this.renderPage(); break;
       }
       case 'buyadd': {
         const g = $('#buyGood')?.value, q = +$('#buyQty').value;
         if (g && q > 0) this.app.act(() => { e.buy[g] = q; });
-        this.renderSide(true); break;
+        this.renderPage(); break;
       }
-      case 'buydel': this.app.act(() => { delete e.buy[t.dataset.good]; }); this.renderSide(true); break;
+      case 'buydel': this.app.act(() => { delete e.buy[t.dataset.good]; }); this.renderPage(); break;
       case 'cadd': {
         const r = run(() => P.addContract(s, e.id, +$('#cTo').value, $('#cGood').value, +$('#cQty').value));
         if (r?.ok) this.toast('🚚 Поставка создана');
-        this.renderSide(true); break;
+        this.renderPage(); break;
       }
       case 'cdel': this.app.act(() => P.removeContract(s, +t.dataset.id)); this.renderSide(true); this.refreshWin(); break;
-      case 'create': {
-        const type = t.dataset.type;
-        const host = type === 'shop' ? +$('#shopHost')?.value : null;
-        const r = run(() => P.createEnterprise(s, type, host));
-        if (r?.enterprise) { this.toast(`${ENTERPRISES[type].icon} ${r.enterprise.name} создано`); this.closeWin(); this.app.selectEnt(r.enterprise.id); }
-        break;
-      }
       case 'wtab': this.winTab = t.dataset.tab; this.renderPage(); break;
       case 'cotab': this.coTab = t.dataset.tab; this.renderPage(); this.markNav(); break;
       case 'tocity': this.showCity(); break;
@@ -571,14 +711,14 @@ export class UI {
       switch (act) {
         case 'fcontr': this.form.contractor = t.value; break;
         case 'rent': b.units[t.dataset.t].rent = Math.max(1, Math.round(+t.value || 1)); break;
-        case 'recipe':
-          if (P.canProduce(this.s, e, t.value)) e.recipe = t.value;
-          else this.toast(`Производственный отдел: не больше ${hqLimit(this.s, 'prod')} разных продуктов. Повысьте уровень в штаб-квартире.`, true);
-          break;
+        case 'divrecipe': { const r = P.setDivRecipe(this.s, e, e.divs.find(x => x.id === +t.dataset.d), t.value); if (r.error) this.toast(r.error, true); break; }
+        case 'divon': e.divs.find(x => x.id === +t.dataset.d).on = t.checked; break;
+        case 'divtarget': e.divs.find(x => x.id === +t.dataset.d).target = +t.value; break;
+        case 'autosupply': e.autoSupply = { ...(e.autoSupply || { days: 3 }), on: t.checked }; break;
+        case 'autodays': e.autoSupply = { ...(e.autoSupply || {}), days: +t.value }; break;
         case 'assign': { const r = P.assignSpec(this.s, +t.dataset.id, +t.value || null); if (r.error) this.toast(r.error, true); break; }
         case 'cover': this.app.world.setCoverage(t.dataset.k, t.checked, this.s); break;
         case 'esalary': { const x = this.s.enterprises[t.dataset.id]; x.salary = Math.max(1, Math.round(+t.value || 1)); break; }
-        case 'target': e.target = +t.value; break;
         case 'salary': e.salary = Math.max(1, Math.round(+t.value || 1)); break;
         case 'ename': if (t.value.trim()) e.name = t.value.trim().slice(0, 40); break;
         case 'autosell': e.autoSell[t.dataset.good] = t.checked; break;
@@ -630,6 +770,7 @@ export class UI {
     this.app.world.paused = !slot;
     if (slot) { slot.appendChild(view); this.app.world.resize(); }
     if (this.page === 'company' && this.coTab === 'main') this.drawChart();
+    if (this.page === 'ent' && this.entTab === 'main') this.drawEntChart();
     if (this.page === 'company' && this.coTab === 'reports' && this.rep === 'charts') this.drawReportCharts();
   }
   refreshWin() {
@@ -664,13 +805,13 @@ export class UI {
   companyLevel() { return Math.max(1, Math.floor(Math.log2(Math.max(1, G.netWorth(this.s)) / 125000)) + 1); }
   efficiency() {
     const s = this.s, ents = Object.values(s.enterprises), blds = Object.values(s.buildings).filter(b => G.isPlayer(b) && b.state === 'done' && Object.keys(b.units).length);
-    const vals = [...ents.map(e => Math.min(1, (e.workers / Math.max(1, e.target || 1)) * P.salaryEff(s, e))), ...blds.map(G.occRate)];
+    const vals = [...ents.map(e => Math.min(1, (P.workersOf(e) / Math.max(1, P.targetOf(e) || 1)) * P.salaryEff(s, e))), ...blds.map(G.occRate)];
     return vals.length ? vals.reduce((a, v) => a + v, 0) / vals.length : 1;
   }
 
   co_main(s) {
     const p = this.period(7), rev = p.sum('inc'), exp = p.sum('exp'), profit = rev - exp;
-    const salary = Object.values(s.enterprises).reduce((a, e) => a + e.workers * e.salary, 0);
+    const salary = Object.values(s.enterprises).reduce((a, e) => a + P.workersOf(e) * e.salary, 0);
     const supply = p.sum('exp', 'purchase'), assets = G.netWorth(s) + s.loan;
     const blds = Object.values(s.buildings).filter(G.isPlayer), ents = Object.values(s.enterprises);
     const place = G.rating(s).findIndex(r => r.player) + 1;
@@ -678,8 +819,8 @@ export class UI {
     const tiles = [
       ...blds.map(b => `<button class="tile" data-act="goplot" data-i="${b.i}" data-j="${b.j}" title="${bTitle(b)}${b.state === 'build' ? ' — стройка ' + pct(b.progress / b.buildDays) : ''}">
         ${b.state === 'build' ? '🏗️' : BUILDINGS[b.type].icon}<span class="n">${b.floors}</span>${b.state === 'build' && b.paused ? '<span class="w">⛔</span>' : ''}</button>`),
-      ...ents.map(e => `<button class="tile" data-act="openent" data-id="${e.id}" title="${esc(e.name)}">${ENTERPRISES[e.type].icon}
-        ${e.level > 1 ? `<span class="n">${e.level}</span>` : ''}${this.entProblem(e) ? '<span class="w">⚠️</span>' : ''}</button>`),
+      ...ents.map(e => `<button class="tile" data-act="openent" data-id="${e.id}" title="${esc(e.name)}">${entDef(e).icon}
+        ${P.levelOf(e) > 1 ? `<span class="n">${P.levelOf(e)}</span>` : ''}${this.entProblem(e) ? '<span class="w">⚠️</span>' : ''}</button>`),
     ].join('');
     const hq = Object.keys(HQ).map(k => {
       const l = s.hq[k], used = { staff: P.staffTotal(s), manage: ents.length, prod: P.products(s).size, build: blds.filter(b => b.state === 'build').length }[k];
@@ -741,12 +882,13 @@ export class UI {
     }
     for (const e of Object.values(s.enterprises)) {
       const w = weekOf(e.hist);
-      const goods = e.type === 'shop' ? Object.keys(e.stock).filter(g => GOODS[g].kind === 'retail') : e.type === 'lab' ? (e.research ? [e.research] : [])
-        : e.type === 'construction' || e.type === 'warehouse' ? Object.keys(e.stock) : e.recipe ? [e.recipe] : [];
+      const d = entDef(e);
+      const goods = d.goods ? d.goods.filter(g => e.stock[g]) : e.type === 'lab' ? (e.research ? [e.research] : [])
+        : e.type === 'construction' || e.type === 'warehouse' ? Object.keys(e.stock) : [...new Set(e.divs.map(x => x.recipe).filter(Boolean))];
       let stock = 0;
       for (const g in e.stock) stock += e.stock[g].qty * s.prices[g] * 0.6;
-      rows.push({ key: 'e:' + e.type, icon: ENTERPRISES[e.type].icon, kind: ENTERPRISES[e.type].name, name: esc(e.name), link: `data-act="openent" data-id="${e.id}"`,
-        level: e.level, eff: Math.min(1, (e.workers / Math.max(1, P.maxWorkers(e))) * P.salaryEff(this.s, e) * P.specBonus(this.s, e)),
+      rows.push({ key: 'e:' + e.type + ':' + e.sub, icon: d.icon, kind: d.name, name: esc(e.name), link: `data-act="openent" data-id="${e.id}"`,
+        level: P.levelOf(e), eff: Math.min(1, (P.workersOf(e) / Math.max(1, P.maxWorkers(e))) * P.salaryEff(this.s, e) * P.specBonus(this.s, e)),
         products: goods.map(g => `<span title="${GOODS[g].name}">${GOODS[g].icon}</span>`).join(''), rev: w.rev, exp: w.exp,
         assets: Math.round(e.invested * 0.6 + stock), problem: this.entProblem(e), contracts: s.contracts.some(c => c.from === e.id || c.to === e.id) });
     }
@@ -765,7 +907,8 @@ export class UI {
         <td><span class="star sm">${r.level}</span></td><td><span class="effbar"><i style="width:${Math.round(r.eff * 100)}%"></i></span></td>
         <td class="prods">${r.products}</td><td class="r ${r.rev - r.exp >= 0 ? '' : 'neg'}">${fmt(r.rev - r.exp)}</td><td class="r">${fmt(r.assets)}</td>
         <td>${r.problem ? `<span title="${esc(r.problem)}">${r.problem.startsWith('⛔') ? '⛔' : r.problem.startsWith('%') ? '📉' : '⚠️'}</span>` : ''}${r.contracts ? ' <span title="Есть поставки">🚚</span>' : ''}</td></tr>`).join('')}</table>`;
-    return h + `<h3>Создать предприятие <small class="hint">${Object.keys(s.enterprises).length} / ${hqLimit(s, 'manage')}</small></h3>` + this.win_enterprises(s, true);
+    return h + `<div class="actions"><button class="btn primary" data-act="newent">➕ Создать предприятие</button>
+      <span class="hint">Предприятий ${Object.keys(s.enterprises).length} / ${hqLimit(s, 'manage')}</span></div>`;
   }
 
   // ---------- вкладка «Специалисты» ----------
@@ -794,7 +937,7 @@ export class UI {
     if (ents.length) {
       h += `<h3>Рабочие <small class="hint">${num(P.staffTotal(s))} / ${num(hqLimit(s, 'staff'))} · средняя зарплата в городе ${s.marketSalary} ₽</small></h3>
         <table class="grid"><tr><th>Предприятие</th><th class="r">Работают</th><th class="r">Нужно</th><th>Зарплата, ₽/день</th><th class="r">Эффективность</th></tr>
-        ${ents.map(e => `<tr><td><a href="#" data-act="openent" data-id="${e.id}">${entName(e)}</a></td><td class="r">${e.workers}</td><td class="r">${e.target} / ${P.maxWorkers(e)}</td>
+        ${ents.map(e => `<tr><td><a href="#" data-act="openent" data-id="${e.id}">${entName(e)}</a></td><td class="r">${P.workersOf(e)}</td><td class="r">${P.targetOf(e)} / ${P.maxWorkers(e)}</td>
           <td><input type="number" min="1" value="${e.salary}" data-act="esalary" data-id="${e.id}" style="width:80px"></td><td class="r">${pct(P.salaryEff(s, e))}</td></tr>`).join('')}</table>`;
     }
     return h;
@@ -1130,35 +1273,7 @@ export class UI {
   page_quests(s) { return this.titled('quests'); }
   page_help(s) { return this.titled('help'); }
 
-  entTable(ents) {
-    return `<table><tr><th>Предприятие</th><th>Что делает</th><th class="r">Штат</th><th class="r">Прибыль</th></tr>
-      ${ents.map(e => {
-        const what = e.type === 'lab' ? (e.research ? 'изучает ' + GOODS[e.research].name : '—') : e.type === 'shop' ? 'торговля' : e.type === 'warehouse' ? 'хранение'
-          : e.type === 'construction' ? 'стройка' : goodName(e.recipe);
-        const p = e.last.revenue - e.last.expense, prob = this.entProblem(e);
-        return `<tr><td><a href="#" data-act="openent" data-id="${e.id}">${entName(e)}</a>${prob ? ` <span title="${esc(prob)}">⚠️</span>` : ''}</td><td>${what}</td>
-          <td class="r">${e.workers}</td><td class="r ${p >= 0 ? 'pos' : 'neg'}">${fmt(p)}</td></tr>`;
-      }).join('')}</table>`;
-  }
-
-  win_enterprises(s, cardsOnly = false) {
-    const ents = Object.values(s.enterprises);
-    let h = cardsOnly ? '' : ents.length ? this.entTable(ents) : '<p class="hint">У вас пока нет предприятий.</p>';
-    const hosts = P.shopHosts(s);
-    h += `<h3>Создать предприятие</h3><p class="hint">Фермы, карьеры, заводы, склады, НИИ и строительная компания работают виртуально — участок в городе им не нужен.
-      Магазин открывается в коммерческом помещении жилого дома.</p><div class="cards">`;
-    for (const t in ENTERPRISES) {
-      const d = ENTERPRISES[t];
-      const shopBlock = t === 'shop'
-        ? (hosts.length ? `<select id="shopHost">${hosts.map(b => `<option value="${b.id}">Дом №${b.id} (${b.owner === 'player' ? 'ваш' : 'аренда ' + b.units.comm.rent + ' ₽'})</option>`).join('')}</select>`
-          : '<small class="warn">Нет домов со свободными помещениями — постройте жилой дом.</small>')
-        : '';
-      h += `<div class="card"><div class="ic">${d.icon}</div><b>${d.name}</b><small>${d.desc}</small>${shopBlock}
-        <div class="price">${fmt(d.cost)}</div>
-        <button class="btn small primary" data-act="create" data-type="${t}" ${s.money < d.cost || (t === 'shop' && !hosts.length) ? 'disabled' : ''}>Создать</button></div>`;
-    }
-    return h + '</div>';
-  }
+  win_enterprises() { return this.co_ent(this.s); }
 
   win_contracts(s) {
     if (!s.contracts.length) return '<p>Поставок пока нет. Откройте предприятие → вкладка «Поставки», чтобы возить сырьё на завод, стройматериалы в строительную компанию, а товары — в магазин.</p>';
@@ -1187,7 +1302,7 @@ export class UI {
       h += '<table><tr><th>Товар</th><th>Где</th><th>Из чего</th><th class="r">Мощн./день</th></tr>';
       for (const r in RECIPES) {
         const R = RECIPES[r];
-        h += `<tr><td>${goodName(r)}</td><td>${ENTERPRISES[R.ent].name}</td><td>${Object.entries(R.inputs).map(([g, k]) => `${k}×${GOODS[g].icon}`).join(' + ') || '—'}</td><td class="r">${R.rate}</td></tr>`;
+        h += `<tr><td>${goodName(r)}</td><td>${producers(r).join(', ')}</td><td>${Object.entries(R.inputs).map(([g, k]) => `${k}×${GOODS[g].icon}`).join(' + ') || '—'}</td><td class="r">${R.rate}</td></tr>`;
       }
       h += '</table><h3>Стройматериалы на один этаж</h3><table>';
       for (const t in BUILDINGS) h += `<tr><td>${BUILDINGS[t].icon} ${BUILDINGS[t].name}</td><td>${Object.entries(BUILDINGS[t].materials).map(([g, n]) => `${n} ${GOODS[g].icon}`).join(' · ')}</td></tr>`;
