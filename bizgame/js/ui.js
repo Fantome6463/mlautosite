@@ -8,6 +8,7 @@ import * as G from './game.js';
 import * as P from './production.js';
 import { CATS } from './ledger.js';
 import { entDef, defOf, recipesFor, sellsList, accepts, producers, GROUPS, UNLOCKS } from './catalog.js';
+import { ic, eTile, entTile, bTile, bGlyph, unitIc, stripEmoji } from './icons.js';
 
 const $ = s => document.querySelector(s);
 const esc = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -19,14 +20,19 @@ const qBadge = q => {
   return `<span class="q" style="background:${c}33;color:${c}">${q.toFixed(1)}</span>`;
 };
 const stars = q => '★'.repeat(q) + '☆'.repeat(5 - q);
-const goodName = g => `${GOODS[g].icon} ${GOODS[g].name}`;
+const goodName = g => `${GOODS[g].icon} ${GOODS[g].name}`;               // для <option>
+const gn = g => `<span class="gn"><span class="ge">${GOODS[g].icon}</span>${GOODS[g].name}</span>`; // для разметки
+const initials = n => String(n).split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+const ava = (name, cls = '') => `<span class="avatar ${cls}">${esc(initials(name))}</span>`;
 // Звезда уровня предприятия: уровень и сколько свободных уровней (как «8+4» в Бизмании)
 const lvlStar = (e, cls = '') => {
   const free = P.freeLevels(e);
   return `<span class="lvlwrap" title="Уровень предприятия ${e.lvl || 1}, свободных уровней: ${free}"><span class="star ${cls}">${e.lvl || 1}</span>${free ? `<b class="free">+${free}</b>` : ''}</span>`;
 };
-const entName = e => `${entDef(e).icon} ${esc(e.name)}`;
-const bTitle = b => `${BUILDINGS[b.type].icon} ${BUILDINGS[b.type].name} №${b.id}`;
+const entName = e => esc(e.name);
+const entHtml = e => `<span class="nm">${eTile(e, 'sm')}${esc(e.name)}</span>`;
+const bTitle = b => `${BUILDINGS[b.type].name} №${b.id}`;
+const bHtml = b => `${bTile(b.state === 'build' ? 'site' : b.type, 'sm')}${bTitle(b)}`;
 const ownerName = (s, b) => (b.owner === 'player' ? esc(s.company) : esc(RIVALS[b.owner].name));
 const ownerColor = b => (b.owner === 'player' ? '#3b82f6' : RIVALS[b.owner].color);
 const fmtShort = v => (Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(Math.abs(v) >= 1e8 ? 0 : 1).replace('.', ',') + ' млн ₽' : fmt(v));
@@ -58,7 +64,7 @@ function nextUnlocks(s) {
   const L = G.companyLevel(s), list = [];
   for (const [k, l] of Object.entries(UNLOCKS)) if (l > L && l <= L + 3) { const [t, sb] = k.split(':'); list.push([l, defOf(t, sb)]); }
   list.sort((a, b) => a[0] - b[0]);
-  return list.length ? `<div class="hint" style="margin-top:6px">Скоро: ${list.slice(0, 4).map(([l, d]) => `${d.icon} ${d.name} (${l})`).join(', ')}</div>` : '';
+  return list.length ? `<div class="hint" style="margin-top:6px">Скоро: ${list.slice(0, 4).map(([l, d]) => `${d.name} (${l})`).join(', ')}</div>` : '';
 }
 function gameDate(day) {
   const d = new Date(Date.UTC(2001, 0, day));
@@ -80,7 +86,8 @@ export class UI {
       el.addEventListener('click', e => this.onClick(e));
       el.addEventListener('change', e => this.onChange(e));
     }
-    document.querySelectorAll('[data-page]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); this.openPage(b.dataset.page, b.dataset.tab); }));
+    document.querySelectorAll('[data-ic]').forEach(el => el.insertAdjacentHTML('afterbegin', ic(el.dataset.ic)));
+    document.querySelectorAll('[data-page]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); if (b.dataset.rep) this.rep = b.dataset.rep; this.openPage(b.dataset.page, b.dataset.tab); }));
   }
 
   get s() { return this.app.state; }
@@ -88,7 +95,7 @@ export class UI {
   toast(text, err = false) {
     const t = document.createElement('div');
     t.className = 'toast' + (err ? ' err' : '');
-    t.textContent = text;
+    t.textContent = stripEmoji(text);
     $('#toasts').appendChild(t);
     setTimeout(() => t.remove(), 3200);
   }
@@ -108,12 +115,13 @@ export class UI {
     $('#hdrCompany').textContent = s.company;
     $('#date').textContent = gameDate(s.day);
     const sec = Math.ceil(msLeft / 1000);
-    $('#dayLeft').textContent = speed ? `${Math.floor(sec / 60)} мин. ${sec % 60} сек.${speed > 1 ? ` (×${speed})` : ''}` : 'пауза';
+    $('#dayLeft').textContent = speed ? `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}${speed > 1 ? ` ×${speed}` : ''}` : 'пауза';
+    $('#dayBar').style.width = `${Math.max(0, Math.min(100, 100 - (msLeft / (this.app.dayMs || 60000)) * 100))}%`;
     $('#questDot').classList.toggle('on', G.QUESTS.some(q => !s.quests[q.id]) && this.page !== 'quests');
     const n = s.news[0];
     if (n && n !== this.lastNews) {
       this.lastNews = n;
-      $('#news').innerHTML = `<div class="item"><span class="d">День ${n.day}</span>${esc(n.text)}</div>`;
+      $('#news').innerHTML = `<span class="item"><span class="d">День ${n.day}</span>${esc(stripEmoji(n.text))}</span>`;
     }
   }
 
@@ -129,10 +137,10 @@ export class UI {
       const p = world.screenPos(b.i, b.j, world.heightOf(b));
       if (!p) { el.style.display = 'none'; return; }
       let html, bad = false;
-      if (b.state === 'build') { bad = b.paused; html = `${b.paused ? '⛔' : '🏗️'} ${pct(b.progress / b.buildDays)}`; }
-      else if (b.owner === 'player') html = `${BUILDINGS[b.type].icon}${BUILDINGS[b.type].category === 'social' ? '' : ' ' + pct(G.occRate(b))}`;
+      if (b.state === 'build') { bad = b.paused; html = `${ic(b.paused ? 'stop' : 'crane')}${pct(b.progress / b.buildDays)}`; }
+      else if (b.owner === 'player') html = `${ic(bGlyph(b.type))}${BUILDINGS[b.type].category === 'social' ? '' : pct(G.occRate(b))}`;
       else html = '';
-      if (shopHosts.has(b.id)) html += ' 🏬';
+      if (shopHosts.has(b.id)) html += ic('store');
       if (el._h !== html) { el.innerHTML = html.trim(); el._h = html; }
       el.className = 'badge' + (bad ? ' bad' : '');
       el.style.display = '';
@@ -177,7 +185,7 @@ export class UI {
     if (!force && side.contains(document.activeElement) && document.activeElement.matches('input,select')) return;
     const top = side.scrollTop;
     const s = this.s;
-    let html = '<button class="x" data-act="close">✕</button>';
+    let html = `<button class="x" data-act="close" title="Закрыть">${ic('x')}</button>`;
     {
       const { i, j } = this.sel;
       const b = G.buildingAt(s, i, j);
@@ -192,7 +200,7 @@ export class UI {
 
   coverageHtml(i, j) {
     const c = G.coverage(this.s, i, j);
-    return `<span>Больница рядом</span><span>${c.health ? '✅ да' : '— нет'}</span><span>Полиция рядом</span><span>${c.safety ? '✅ да' : '— нет'}</span>`;
+    return `<span>Больница рядом</span><span class="${c.health ? 'pos' : ''}">${c.health ? 'да' : 'нет'}</span><span>Полиция рядом</span><span class="${c.safety ? 'pos' : ''}">${c.safety ? 'да' : 'нет'}</span>`;
   }
 
   // ---------- заказ стройки ----------
@@ -200,20 +208,20 @@ export class UI {
     const s = this.s, f = this.form;
     if (!BUILDINGS[f.type].floors.includes(f.floors)) f.floors = BUILDINGS[f.type].floors[0];
     const locWord = p.loc >= 1.4 ? 'отличный' : p.loc >= 1.05 ? 'хороший' : p.loc >= 0.8 ? 'средний' : 'окраина';
-    let h = `<h2>🪧 Свободный участок</h2><div class="sub">Участок ${p.i}:${p.j}</div>
+    let h = `<h2>${ic('pin')} Свободный участок</h2><div class="sub">Участок ${p.i}:${p.j}</div>
       <div class="kv"><span>Цена земли</span><span>${fmt(p.price)}</span><span>Район</span><span>${p.loc.toFixed(2)} — ${locWord}</span>${this.coverageHtml(p.i, p.j)}</div>
       <p class="hint">В центре дороже земля, но выше аренда и больше покупателей. Больница и полиция рядом делают дом привлекательнее.</p>
       <div class="box"><h4>1. Что строим</h4>`;
     for (const cat in CATEGORIES) {
       const types = Object.keys(BUILDINGS).filter(t => BUILDINGS[t].category === cat);
       h += `<div class="cat"><b>${CATEGORIES[cat].name}</b><small>${CATEGORIES[cat].desc}</small><div class="chips">
-        ${types.map(t => `<button class="chip ${f.type === t ? 'on' : ''}" data-act="ftype" data-v="${t}">${BUILDINGS[t].icon} ${BUILDINGS[t].name}</button>`).join('')}</div></div>`;
+        ${types.map(t => `<button class="chip ${f.type === t ? 'on' : ''}" data-act="ftype" data-v="${t}">${ic(bGlyph(t))}${BUILDINGS[t].name}</button>`).join('')}</div></div>`;
     }
     const d = BUILDINGS[f.type];
     h += `</div>`;
     if (d.floors.length > 1) {
       h += `<div class="box"><h4>2. Этажность</h4><div class="chips">${d.floors.map(n => `<button class="chip ${f.floors === n ? 'on' : ''}" data-act="ffloors" data-v="${n}">${n} эт.</button>`).join('')}</div>
-        <div class="kv">${Object.entries(d.units(f.floors)).map(([t, n]) => `<span>${UNITS[t].icon} ${UNITS[t].name}</span><span>${n} шт. по ~${Math.round(G.refRent(p, t))} ₽/день</span>`).join('')}</div></div>`;
+        <div class="kv">${Object.entries(d.units(f.floors)).map(([t, n]) => `<span>${unitIc(t)} ${UNITS[t].name}</span><span>${n} шт. по ~${Math.round(G.refRent(p, t))} ₽/день</span>`).join('')}</div></div>`;
     } else {
       h += `<div class="box"><h4>2. Как работает</h4><div class="kv"><span>Город платит</span><span>${fmt(d.subsidy)}/день</span><span>Содержание</span><span>${fmt(d.upkeep)}/день</span>
         <span>Радиус</span><span>${d.radius} участка</span></div><p class="hint">Дома в радиусе охотнее снимают и платят за аренду больше. Город растёт быстрее.</p></div>`;
@@ -225,7 +233,7 @@ export class UI {
       if (c === 'own') {
         const co = G.builders(s)[0];
         extra = co
-          ? `<div class="mats">${Object.entries(q.materials).map(([g, n]) => { const have = P.stockQty(co, g); return `<span class="${have >= n ? 'pos' : 'warn'}">${goodName(g)} ${num(have)}/${num(n)}</span>`; }).join('')}</div>
+          ? `<div class="mats">${Object.entries(q.materials).map(([g, n]) => { const have = P.stockQty(co, g); return `<span class="${have >= n ? 'pos' : 'warn'}">${gn(g)} ${num(have)}/${num(n)}</span>`; }).join('')}</div>
              <small>Материалы берутся со склада «${esc(co.name)}» по ходу стройки. Не хватит — стройка встанет.</small>`
           : `<small class="warn">Нужна своя строительная компания — создайте её в меню «Предприятия».</small>`;
       }
@@ -241,14 +249,14 @@ export class UI {
       ${q.own ? '' : `<span>Остальное — по ходу стройки</span><span>${fmt(q.cost * (1 - ADVANCE))}</span>`}
       <span><b>Платите сейчас</b></span><span><b>${fmt(now)}</b></span></div>
       ${err ? `<div class="warn">${esc(err)}</div>` : ''}
-      <div class="actions"><button class="btn primary" data-act="order" ${err ? 'disabled' : ''}>🏗️ Заказать строительство</button></div>`;
+      <div class="actions"><button class="btn primary" data-act="order" ${err ? 'disabled' : ''}>${ic('crane')} Заказать строительство</button></div>`;
     return h;
   }
 
   siteHtml(b) {
     const s = this.s, c = contractorInfo(b.contractor), mine = b.owner === 'player';
     const left = Math.max(0, b.buildDays - b.progress);
-    let h = `<h2>🏗️ Стройка</h2><div class="sub">${bTitle(b)} · ${b.floors} эт. · участок ${b.i}:${b.j}</div>
+    let h = `<h2>${bTile('site')} Стройка</h2><div class="sub">${bTitle(b)} · ${b.floors} эт. · участок ${b.i}:${b.j}</div>
       <div class="kv"><span>Владелец</span><span style="color:${ownerColor(b)}">${ownerName(s, b)}</span>
       <span>Строит</span><span style="color:${c.color}">${c.name}</span>
       <span>Готовность</span><span>${pct(b.progress / b.buildDays)}</span></div>
@@ -259,13 +267,13 @@ export class UI {
     if (b.paused) {
       const why = b.waiting === 'company' ? 'нет строительной компании' : b.waiting === 'crew' ? 'нет рабочих в строительной компании'
         : b.waiting && GOODS[b.waiting] ? `не хватает материала «${GOODS[b.waiting].name}»` : 'нечем платить подрядчику';
-      h += `<div class="warn">⛔ Стройка стоит: ${why}</div>`;
+      h += `<div class="warn">Стройка стоит: ${why}</div>`;
     } else if (b.delayed) h += '<div class="warn">Сегодня простой у подрядчика</div>';
     if (b.contractor === 'own') {
       const co = s.enterprises[b.builder];
       h += `<div class="box"><h4>Материалы (нужно всего / на складе компании)</h4><div class="kv">
-        ${Object.entries(b.materials).map(([g, n]) => `<span>${goodName(g)}</span><span>${num(n)} / ${co ? num(P.stockQty(co, g)) : 0}</span>`).join('')}</div>
-        ${co ? `<button class="btn small" data-act="openent" data-id="${co.id}">👷 Открыть «${esc(co.name)}»</button>` : ''}</div>`;
+        ${Object.entries(b.materials).map(([g, n]) => `<span>${gn(g)}</span><span>${num(n)} / ${co ? num(P.stockQty(co, g)) : 0}</span>`).join('')}</div>
+        ${co ? `<button class="btn small" data-act="openent" data-id="${co.id}">${ic('hardhat')} Открыть «${esc(co.name)}»</button>` : ''}</div>`;
     }
     h += `<div class="actions"><button class="btn danger" data-act="cancel">Отменить стройку (вернут ${fmt(b.land * 0.8 + (b.contractor === 'own' ? 0 : b.paid * 0.3))})</button></div>`;
     return h;
@@ -277,7 +285,7 @@ export class UI {
     for (const t in b.units) {
       const u = b.units[t];
       const shops = t === 'comm' ? P.shopsIn(s, b).length : 0;
-      h += `<tr><td>${UNITS[t].icon} ${UNITS[t].name}</td><td class="r">${u.occ + shops}/${u.total}</td>
+      h += `<tr><td><span class="nm">${unitIc(t)}${UNITS[t].name}</span></td><td class="r">${u.occ + shops}/${u.total}</td>
         <td>${editable ? `<input type="number" min="1" value="${u.rent}" data-act="rent" data-t="${t}" style="width:80px">` : u.rent}</td>
         <td class="r">${Math.round(G.refRent(p, t))}</td></tr>`;
     }
@@ -289,7 +297,7 @@ export class UI {
     const tabs = [['main', 'Обзор']];
     if (Object.keys(b.units).length) tabs.push(['tenants', 'Арендаторы']);
     if (!tabs.some(t => t[0] === this.tab)) this.tab = 'main';
-    let h = `<h2>${d.icon} ${d.name}</h2><div class="sub">№${b.id} · ${b.floors} эт. · участок ${b.i}:${b.j} · построил ${contractorInfo(b.contractor).name}</div>
+    let h = `<h2>${bTile(b.type)} ${d.name}</h2><div class="sub">№${b.id} · ${b.floors} эт. · участок ${b.i}:${b.j} · построил ${contractorInfo(b.contractor).name}</div>
       <div class="tabs">${tabs.map(([k, n]) => `<button data-act="tab" data-tab="${k}" class="${this.tab === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
     const profit = b.last.income - b.last.expense;
     if (this.tab === 'main') {
@@ -314,12 +322,12 @@ export class UI {
     const s = this.s;
     const shops = P.shopsIn(s, b);
     let h = '';
-    if (b.units.apt) h += `<div class="box"><h4>🏠 Квартиры</h4>Живёт семей: <b>${b.units.apt.occ}</b> из ${b.units.apt.total} (≈${Math.round(b.units.apt.occ * 2.4)} чел.)</div>`;
+    if (b.units.apt) h += `<div class="box"><h4>${unitIc('apt')} Квартиры</h4>Живёт семей: <b>${b.units.apt.occ}</b> из ${b.units.apt.total} (≈${Math.round(b.units.apt.occ * 2.4)} чел.)</div>`;
     for (const t of ['comm', 'office']) {
       if (!b.units[t]) continue;
       const names = b.tenants[t] || [];
-      h += `<div class="box"><h4>${UNITS[t].icon} ${UNITS[t].name}</h4>
-        ${t === 'comm' ? shops.map(e => `<div class="row">🏬 <a href="#" data-act="openent" data-id="${e.id}">${esc(e.name)}</a> <span class="hint">${e.host && s.buildings[e.host].owner === 'player' ? 'ваш, без аренды' : 'ваш'}</span></div>`).join('') : ''}
+      h += `<div class="box"><h4>${unitIc(t)} ${UNITS[t].name}</h4>
+        ${t === 'comm' ? shops.map(e => `<div class="row">${eTile(e, 'sm')} <a href="#" data-act="openent" data-id="${e.id}">${esc(e.name)}</a> <span class="hint">${e.host && s.buildings[e.host].owner === 'player' ? 'ваш, без аренды' : 'ваш'}</span></div>`).join('') : ''}
         ${names.length ? names.map(n => `<div class="row">${esc(n)}</div>`).join('') : (t === 'comm' && shops.length ? '' : '<span class="hint">Пусто</span>')}</div>`;
     }
     h += this.openShopHtml(b);
@@ -334,12 +342,12 @@ export class UI {
     return `<div class="box"><h4>Своя точка продаж здесь</h4>
       <p class="hint">${own ? (free > 0 ? 'Есть свободное помещение — аренду платить не нужно.' : 'Свободных помещений нет: один арендатор съедет.') : `Аренда ${fmt(b.units.comm.rent)}/день владельцу дома.`}
       Открытие: ${fmt(ENTERPRISES.shop.cost)}.</p>
-      <button class="btn primary" data-act="openshop">🏬 Открыть здесь магазин, ресторан, салон…</button></div>`;
+      <button class="btn primary" data-act="openshop">${ic('store')} Открыть здесь магазин, ресторан, салон…</button></div>`;
   }
 
   rivalBuildingHtml(b) {
     const s = this.s, d = BUILDINGS[b.type];
-    let h = `<h2>${d.icon} ${d.name}</h2><div class="sub">№${b.id} · ${b.floors} эт. · участок ${b.i}:${b.j}</div>
+    let h = `<h2>${bTile(b.type)} ${d.name}</h2><div class="sub">№${b.id} · ${b.floors} эт. · участок ${b.i}:${b.j}</div>
       <div class="kv"><span>Владелец</span><span style="color:${ownerColor(b)}">${ownerName(s, b)}</span><span>Заполненность</span><span>${pct(G.occRate(b))}</span>${this.coverageHtml(b.i, b.j)}</div>`;
     if (Object.keys(b.units).length) h += this.unitsTable(b, false);
     return h + this.openShopHtml(b);
@@ -365,15 +373,15 @@ export class UI {
     if (!tabs.some(t => t[0] === this.entTab)) this.entTab = 'main';
     const host = e.host && s.buildings[e.host];
     const prob = this.entProblem(e);
-    return `<div class="page-title"><span class="big">${d.icon}</span>
-        <div><div class="enav"><button class="btn small" data-act="entnav" data-dir="-1" title="Предыдущее">◀</button><button class="btn small" data-act="entnav" data-dir="1" title="Следующее">▶</button>
+    return `<div class="page-title">${eTile(e, 'xl')}
+        <div><div class="enav"><button class="btn icon" data-act="entnav" data-dir="-1" title="Предыдущее">${ic('left')}</button><button class="btn icon" data-act="entnav" data-dir="1" title="Следующее">${ic('right')}</button>
           <h1>${esc(e.name)}</h1></div>
           <div class="hint">Компания: <a href="#" data-act="cotabgo" data-k="main">${esc(s.company)}</a> · ${d.name}${host ? ` · <a href="#" data-act="goplot" data-i="${host.i}" data-j="${host.j}">дом №${host.id}</a>` : ' · виртуальное предприятие'}</div></div>
-        <div class="acts">${prob ? `<span class="probicon" title="${esc(prob)}">⛔</span>` : ''}<span class="hint">Город: 🏙️ ${esc(s.cityName)}</span>
+        <div class="acts"><span class="hint">${ic('city')} ${esc(s.cityName)}</span>
           <span class="xpwrap" title="Опыт: ${num(e.xp || 0)} из ${num(P.xpNeed(e.lvl || 1))}">Опыт: <span class="effbar"><i style="width:${Math.round(((e.xp || 0) / P.xpNeed(e.lvl || 1)) * 100)}%"></i></span></span>
           Уровень: ${lvlStar(e)}</div></div>
       <div class="ftabs">${tabs.map(([k, n]) => `<button data-act="enttab" data-k="${k}" class="${this.entTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
-      ${prob ? `<div class="warn">⚠️ ${esc(prob)}</div>` : ''}${this[`ep_${this.entTab}`](e, s)}`;
+      ${prob ? `<div class="warn box">${esc(prob)}</div>` : ''}${this[`ep_${this.entTab}`](e, s)}`;
   }
 
   ep_main(e, s) {
@@ -387,7 +395,7 @@ export class UI {
     const slots = Array.from({ length: P.MAX_DIVS }, (_, n) => e.divs[n]);
     return `<div class="co-grid">
       <div>
-        <div class="row big2"><span title="Рабочие">👷 ${num(P.workersOf(e))}</span><span title="Оборудование">🛠️ ${P.levelOf(e) * 10}</span></div>
+        <div class="row big2"><span title="Рабочие">${ic('hardhat')} ${num(P.workersOf(e))}</span><span title="Оборудование, шт.">${ic('gear')} ${num(e.divs.reduce((a, x) => a + (x.eqN || 0), 0))}</span></div>
         <div class="kv"><span>Уровень / занято подразделениями</span><span>${e.lvl || 1} / ${P.levelOf(e)} (свободно ${P.freeLevels(e)})</span>
           <span>Опыт</span><span>${num(e.xp || 0)} из ${num(P.xpNeed(e.lvl || 1))}</span><span>Опыт за вчера</span><span>+${num(e.lastXp || 0)}</span></div>
         ${P.freeLevels(e) >= P.XP_FREE_CAP ? `<p class="warn">Опыт не копится: ${P.XP_FREE_CAP} свободных уровней не использованы — постройте или улучшите подразделение.</p>` : ''}
@@ -395,19 +403,19 @@ export class UI {
         <div class="row"><label>Износ оборудования</label><span class="effbar wide red"><i style="width:${Math.round(wear * 100)}%"></i></span> ${pct(wear)}</div>
         <h4 class="sect">Структура сбыта (7 дней)</h4>
         <div class="kv"><span>Своей компании</span><span>${num(own)} шт.</span><span>Другим</span><span>${num(sold)} шт.</span></div>
-        <div class="gicons">${goods.map(g => `<span title="${GOODS[g].name}: ${num(P.stockQty(e, g))} на складе">${GOODS[g].icon}<i style="height:${Math.min(100, (P.stockQty(e, g) / Math.max(1, P.capacity(e) / 4)) * 100)}%"></i></span>`).join('')}</div>
+        <div class="gicons">${goods.map(g => `<span class="ge" title="${GOODS[g].name}: ${num(P.stockQty(e, g))} на складе">${GOODS[g].icon}<i style="height:${Math.min(100, (P.stockQty(e, g) / Math.max(1, P.capacity(e) / 4)) * 100)}%"></i></span>`).join('')}</div>
       </div>
       <div class="co-center">
         <div class="chart-box"><canvas class="chart" id="echart"></canvas></div>
         <div class="statlist"><span>Наличные компании:</span><span>${fmt(s.money)}</span><span>Выручка (7 дн.):</span><span>${fmt(w.rev)}</span>
           <span>Прибыль (7 дн.):</span><span class="${w.rev - w.exp >= 0 ? 'pos' : 'neg'}">${fmt(w.rev - w.exp)}</span><span>Активы:</span><span>${fmt(e.invested * 0.6 + stockVal)}</span></div>
       </div>
-      <div class="profile">${sp ? `<div class="ava sm">${sp.face}</div>${esc(sp.name)}<br>${sp.prof} · ур. ${sp.level}` : `<div class="ava sm">❔</div>Начальник не назначен<br><a href="#" data-act="cotabgo" data-k="staff">нанять специалиста</a>`}
+      <div class="profile">${sp ? `${ava(sp.name, 'lg')}<br>${esc(sp.name)}<br>${sp.prof} · ур. ${sp.level}` : `<span class="avatar lg empty">${ic('user')}</span><br>Начальник не назначен<br><a href="#" data-act="cotabgo" data-k="staff">нанять специалиста</a>`}
         <div style="margin-top:8px">Эффективность: <span class="eff"><i style="width:${Math.round(eff * 100)}%"></i></span> ${pct(eff)}</div></div>
     </div>
     <div class="iso">${slots.map(x => x
-      ? `<button class="isotile" data-act="enttab-go" data-k="divs" title="${esc(P.divName(e, x))}"><span>${d.icon}</span><span class="star sm">${x.level}</span>${x.recipe ? `<b>${GOODS[x.recipe].icon}</b>` : ''}${x.on ? '' : '<em>выкл.</em>'}</button>`
-      : `<button class="isotile empty ${P.freeLevels(e) < 1 ? 'nofree' : ''}" data-act="adddiv" title="${P.freeLevels(e) < 1 ? 'Нужен свободный уровень предприятия' : 'Новое подразделение — ' + fmt(P.divCost(e))}"><span>${P.freeLevels(e) < 1 ? '🔒' : '➕'}</span></button>`).join('')}</div>
+      ? `<button class="isotile" data-act="enttab-go" data-k="divs" title="${esc(P.divName(e, x))}">${eTile(e, 'lg')}<span class="star sm">${x.level}</span>${x.recipe ? `<b class="ge">${GOODS[x.recipe].icon}</b><span class="slot">${GOODS[x.recipe].name}</span>` : ''}${x.on ? '' : '<em>выкл.</em>'}</button>`
+      : `<button class="isotile empty ${P.freeLevels(e) < 1 ? 'nofree' : ''}" data-act="adddiv" title="${P.freeLevels(e) < 1 ? 'Нужен свободный уровень предприятия' : 'Новое подразделение — ' + fmt(P.divCost(e))}"><span>${ic(P.freeLevels(e) < 1 ? 'lock' : 'plus')}${P.freeLevels(e) < 1 ? 'нужен свободный уровень' : 'новое · ' + fmtShort(P.divCost(e))}</span></button>`).join('')}</div>
     <div class="actions"><input type="text" value="${esc(e.name)}" data-act="ename" maxlength="40" style="width:240px">
       <button class="btn danger" data-act="eclose">Продать государству (${fmt(P.stateBuyout(s, e))})</button></div>`;
   }
@@ -418,8 +426,8 @@ export class UI {
       ${e.divs.map(x => {
         const r = RECIPES[x.recipe], info = P.divInfo(s, e, x), st = e.stock[x.recipe];
         const eff = info?.maxOut ? Math.min(1, (e.last.produced[x.recipe] || 0) / Math.max(1, info.maxOut)) : 0;
-        return `<tr><td><span class="ico">${entDef(e).icon}</span> ${esc(P.divName(e, x))}</td><td><span class="star sm">${x.level}</span></td>
-          <td title="Качество оборудования ${x.eq || 3}, требует квалификацию ${P.reqQual(x)}">🛠️ ${x.level * 10} <span class="hint">кач. ${x.eq || 3}</span> &nbsp; 👷 ${x.workers}</td><td><span class="tech">${x.recipe ? s.tech[x.recipe] : '—'}</span></td>
+        return `<tr><td><span class="nm">${eTile(e, 'sm')}${esc(P.divName(e, x))}</span></td><td><span class="star sm">${x.level}</span></td>
+          <td title="Качество оборудования ${x.eq || 3}, требует квалификацию ${P.reqQual(x)}">${ic('gear')} ${x.eqN || 0} <span class="hint">кач. ${x.eq || 3}</span> &nbsp; ${ic('hardhat')} ${x.workers}</td><td><span class="tech">${x.recipe ? s.tech[x.recipe] : '—'}</span></td>
           <td><select data-act="divrecipe" data-d="${x.id}">${options.map(g => `<option value="${g}" ${g === x.recipe ? 'selected' : ''}>${GOODS[g].icon} ${GOODS[g].name}</option>`).join('')}</select>
             <span class="hint">${num(e.last.produced[x.recipe] || 0)} / ${num(info?.maxOut || 0)}</span></td>
           <td class="r">${st ? st.q.toFixed(2) : '—'}</td>
@@ -427,9 +435,7 @@ export class UI {
           <td><span class="effbar"><i style="width:${Math.round(eff * 100)}%"></i></span></td><td class="r">${st ? fmt(st.c) : '—'}</td>
           <td><label class="switch"><input type="checkbox" data-act="divon" data-d="${x.id}" ${x.on ? 'checked' : ''}><i></i></label></td></tr>`;
       }).join('')}</table>
-      <div class="actions"><button class="btn primary" data-act="adddiv" ${e.divs.length >= P.MAX_DIVS || P.freeLevels(e) < 1 ? 'disabled' : ''}>➕ Новое подразделение (${fmt(P.divCost(e))})</button>
-        <span class="hint">Свободных уровней: <b>${P.freeLevels(e)}</b>${P.freeLevels(e) < 1 ? ' — копите опыт: он идёт за производство и продажи' : ''}</span>
-        <span class="hint">Подразделений: ${e.divs.length} / ${P.MAX_DIVS}. Технологии повышает лаборатория.</span></div>`;
+      <p class="hint">Подразделений: ${e.divs.length} / ${P.MAX_DIVS}, свободных уровней: ${P.freeLevels(e)}. Новые подразделения — на вкладке «Подразделения». Технологии повышает лаборатория.</p>`;
   }
 
   ep_supply(e, s) {
@@ -443,17 +449,17 @@ export class UI {
         <th class="r">Закуплено (7 дн.)</th><th class="r">Поставки/день</th><th>Закупать/день</th><th class="r">Сумма/день</th><th></th></tr>
       ${goods.map(g => {
         const st = e.stock[g], inc = incoming.filter(c => c.good === g).reduce((a, c) => a + c.qty, 0);
-        return `<tr><td>${goodName(g)}</td><td class="r">${num(need[g] || shopNeed[g] || 0)}</td><td class="r">${num(st?.qty || 0)}</td><td class="r">${st ? st.q.toFixed(2) : '—'}</td>
+        return `<tr><td>${gn(g)}</td><td class="r">${num(need[g] || shopNeed[g] || 0)}</td><td class="r">${num(st?.qty || 0)}</td><td class="r">${st ? st.q.toFixed(2) : '—'}</td>
           <td class="r">${st ? fmt(st.c) : '—'}</td><td class="r">${num(fl[g]?.bought || 0)}</td><td class="r">${num(inc)}</td>
           <td><input type="number" min="0" value="${Math.round(e.buy[g] || 0)}" data-act="buyqty" data-good="${g}" ${e.autoSupply?.on && need[g] ? 'disabled' : ''} style="width:80px"> <span class="hint">по ${P.buyPrice(s, g)} ₽</span></td>
-          <td class="r">${fmt((e.buy[g] || 0) * P.buyPrice(s, g))}</td><td>${e.buy[g] != null ? `<button class="btn small" data-act="buydel" data-good="${g}">✕</button>` : ''}</td></tr>`;
+          <td class="r">${fmt((e.buy[g] || 0) * P.buyPrice(s, g))}</td><td>${e.buy[g] != null ? `<button class="btn small" data-act="buydel" data-good="${g}" title="Убрать">${ic('x')}</button>` : ''}</td></tr>`;
       }).join('') || '<tr><td colspan="10" class="hint">Сырьё не требуется. Добавьте закупку ниже.</td></tr>'}
       <tr><td colspan="8" class="r"><b>Итого, сумма закупки в день:</b></td><td class="r"><b>${fmt(total)}</b></td><td></td></tr></table>
       <div class="row"><select id="buyGood">${can.map(g => `<option value="${g}">${goodName(g)} — ${P.buyPrice(s, g)} ₽, на складах ${num(s.depot[g])}</option>`).join('')}</select>
         <input type="number" id="buyQty" min="1" value="100"><button class="btn small primary" data-act="buyadd">Добавить закупку</button></div>
       ${Object.keys(need).length ? (P.canAutoSupply(s, e) ? `<label class="row"><input type="checkbox" data-act="autosupply" ${e.autoSupply?.on ? 'checked' : ''}> Авторегулирование снабжения — запас на
         <input type="range" min="1" max="5" value="${e.autoSupply?.weeks || 1}" data-act="autodays" style="max-width:140px"> <b>${e.autoSupply?.weeks || 1} нед.</b></label>`
-        : `<p class="hint">🔒 Авторегулирование снабжения — с ${FEATURES.autoSupply}-го уровня компании для предприятий ${AUTO_SUPPLY_ENT_LEVEL}-го уровня и выше.</p>`) : ''}
+        : `<p class="hint">${ic('lock')} Авторегулирование снабжения — с ${FEATURES.autoSupply}-го уровня компании для предприятий ${AUTO_SUPPLY_ENT_LEVEL}-го уровня и выше.</p>`) : ''}
       <p class="hint">Закупки — с универсальных складов города (запасы ограничены). Поставки от своих предприятий настраиваются на вкладке «Сбыт» у поставщика.</p>
       ${incoming.length ? `<h3>Входящие поставки</h3>${this.contractRows(incoming, 'from')}` : ''}`;
   }
@@ -461,8 +467,8 @@ export class UI {
   contractRows(list, side) {
     const s = this.s;
     return `<table class="grid"><tr><th>${side === 'from' ? 'От кого' : 'Кому'}</th><th>Товар</th><th class="r">В день</th><th></th></tr>
-      ${list.map(c => { const o = s.enterprises[side === 'from' ? c.from : c.to]; return `<tr><td><a href="#" data-act="openent" data-id="${o.id}">${entName(o)}</a></td><td>${goodName(c.good)}</td>
-        <td class="r">${num(c.qty)}</td><td><button class="btn small" data-act="cdel" data-id="${c.id}">✕</button></td></tr>`; }).join('')}</table>`;
+      ${list.map(c => { const o = s.enterprises[side === 'from' ? c.from : c.to]; return `<tr><td><a href="#" data-act="openent" data-id="${o.id}">${entHtml(o)}</a></td><td>${gn(c.good)}</td>
+        <td class="r">${num(c.qty)}</td><td><button class="btn small" data-act="cdel" data-id="${c.id}" title="Удалить">${ic('x')}</button></td></tr>`; }).join('')}</table>`;
   }
 
   ep_sales(e, s) {
@@ -476,12 +482,12 @@ export class UI {
       ${goods.map(g => {
         const st = e.stock[g], f = fl[g] || {};
         const locked = d.goods && sellers.includes(g) && !P.availableGoods(e).includes(g);
-        const priceCell = locked ? `<span class="hint">🔒 с ${P.goodUnlockLevel(e, g)}-го уровня отдела</span>` : d.sells && sellers.includes(g)
+        const priceCell = locked ? `<span class="hint">${ic('lock')} с ${P.goodUnlockLevel(e, g)}-го уровня отдела</span>` : d.sells && sellers.includes(g)
           ? `<input type="number" min="1" value="${e.prices[g] ?? GOODS[g].price}" data-act="price" data-good="${g}" style="width:80px"> <span class="hint">рынок ${Math.round(s.prices[g])}</span>
-            ${(e.prices[g] ?? GOODS[g].price) > s.prices[g] * P.PRICE_CAP ? '<span class="neg" title="Слишком дорого — не покупают">⛔</span>' : ''}`
+            ${(e.prices[g] ?? GOODS[g].price) > s.prices[g] * P.PRICE_CAP ? `<span class="neg" title="Слишком дорого — не покупают">${ic('stop')}</span>` : ''}`
           : P.inDepot(g) ? `${P.sellPrice(s, g, st?.q)} ₽ <label><input type="checkbox" data-act="autosell" data-good="${g}" ${e.autoSell[g] ? 'checked' : ''}> авто</label>
             ${st ? `<button class="btn small" data-act="sell" data-good="${g}">Продать</button>` : ''}` : '—';
-        return `<tr><td>${goodName(g)}</td><td class="r">${num(f.sold || 0)}</td><td class="r">${fmt(f.rev || 0)}</td><td class="r">${num(f.made || 0)}</td><td class="r">${num(f.used || 0)}</td>
+        return `<tr><td>${gn(g)}</td><td class="r">${num(f.sold || 0)}</td><td class="r">${fmt(f.rev || 0)}</td><td class="r">${num(f.made || 0)}</td><td class="r">${num(f.used || 0)}</td>
           <td class="r">${num(st?.qty || 0)}</td><td class="r">${st ? st.q.toFixed(2) : '—'}</td><td class="r">${st ? fmt(st.c) : '—'}</td><td>${priceCell}</td></tr>`;
       }).join('') || '<tr><td colspan="9" class="hint">Пока нечего продавать.</td></tr>'}
       <tr><td><b>Итого (7 дн.):</b></td><td></td><td class="r"><b>${fmt(totRev)}</b></td><td colspan="6"></td></tr></table>`;
@@ -491,7 +497,7 @@ export class UI {
         ${e.area ? `<div class="kv"><span>Жителей и прохожих в охвате</span><span>${num(e.area.pop)}</span><span>Конкурентов того же профиля</span><span>${e.area.comp}</span></div>` : ''}
         <div class="row"><label>Бюджет</label>${P.AD_LEVELS.map(v => `<button class="chip ${(e.ad || 0) === v ? 'on' : ''}" data-act="adset" data-v="${v}">${v ? v + '% · ' + fmtShort(P.adCost(e, v)) + '/день' : 'без рекламы'}</button>`).join('')}</div>
         <p class="hint">Реклама поднимает известность до выбранного уровня, без рекламы известность понемногу падает.</p></div>
-      <div class="actions"><button class="btn" data-act="recprice">💡 Рекомендованные цены</button><span class="hint">с учётом качества; дороже ${P.PRICE_CAP}× средней цены по городу товар не покупают</span></div>` + h
+      <div class="actions"><button class="btn" data-act="recprice">${ic('bulb')} Рекомендованные цены</button><span class="hint">с учётом качества; дороже ${P.PRICE_CAP}× средней цены по городу товар не покупают</span></div>` + h
       + `<p class="hint">Покупателей больше в центре и когда в городе больше жителей. Дешевле рынка и качественнее конкурентов (качество ${NPC_QUALITY}) — больше продаж.
       ${d.goods ? `Пропускная способность: ${num(P.workersOf(e) * SHOP_UNITS_PER_WORKER * P.salaryEff(s, e))} покупок в день.` : 'Услуги не хранятся, блюда портятся за ночь наполовину.'}</p>`;
     h += `<h3>Поставки своим предприятиям</h3>${outgoing.length ? this.contractRows(outgoing, 'to') : '<p class="hint">Нет.</p>'}`;
@@ -511,12 +517,12 @@ export class UI {
         <span class="hint">средняя в городе ${s.marketSalary} ₽ · эффективность ${pct(P.salaryEff(s, e))}</span></div>
       ${e.divs.map((x, n) => {
         const max = P.divMax(e, x);
-        return `<div class="divcard"><div class="dleft"><b>${esc(P.divName(e, x))}</b><div class="isotile sm">${d.icon}</div>
-            <div>Уровень ${x.level} ${x.level < P.MAX_DIV_LEVEL ? `<button class="btn small" data-act="updiv" data-d="${x.id}" ${P.freeLevels(e) < 1 ? 'disabled' : ''} title="${P.freeLevels(e) < 1 ? 'Нужен свободный уровень предприятия' : 'Расширить: ' + fmt(P.divUpgradeCost(e, x))}">⬆ ${fmtShort(P.divUpgradeCost(e, x))}</button>` : ''}
-            ${e.divs.length > 1 ? `<button class="btn small danger" data-act="rmdiv" data-d="${x.id}" title="Продать подразделение">✕</button>` : ''}</div></div>
+        return `<div class="divcard"><div class="dleft"><b>${esc(P.divName(e, x))}</b><div class="dtile">${eTile(e, 'xl')}</div>
+            <div>Уровень ${x.level} ${x.level < P.MAX_DIV_LEVEL ? `<button class="btn small" data-act="updiv" data-d="${x.id}" ${P.freeLevels(e) < 1 ? 'disabled' : ''} title="${P.freeLevels(e) < 1 ? 'Нужен свободный уровень предприятия' : 'Расширить: ' + fmt(P.divUpgradeCost(e, x))}">${ic('up')} ${fmtShort(P.divUpgradeCost(e, x))}</button>` : ''}
+            ${e.divs.length > 1 ? `<button class="btn small danger" data-act="rmdiv" data-d="${x.id}" title="Продать подразделение">${ic('trash')}</button>` : ''}</div></div>
           <div><div class="row"><label>Сотрудники</label><input type="range" min="0" max="${max}" value="${x.target}" data-act="divtarget" data-d="${x.id}"> <b>${x.target}</b></div>
             <div class="kv"><span>Работают</span><span>${x.workers} из ${max}</span><span>Фонд оплаты</span><span>${fmt(x.workers * e.salary)}/день</span>
-              <span>Квалиф. персонала</span><span class="${P.qualOf(s, x) < P.reqQual(x) ? 'neg' : ''}">${P.qualOf(s, x).toFixed(2)}${P.qualOf(s, x) < P.reqQual(x) ? ' ⚠️' : ''}</span>
+              <span>Квалиф. персонала</span><span class="${P.qualOf(s, x) < P.reqQual(x) ? 'neg' : ''}">${P.qualOf(s, x).toFixed(2)}${P.qualOf(s, x) < P.reqQual(x) ? ' ' + ic('alert') : ''}</span>
               <span>Треб. квалификация</span><span>${P.reqQual(x).toFixed(2)}</span></div>
             <label class="row"><input type="checkbox" data-act="trainon" data-d="${x.id}" ${x.trainOn ? 'checked' : ''}> Обучение
               <span class="effbar"><i style="width:${Math.round(((x.train || 0) / P.TRAIN_MAX) * 100)}%"></i></span> <span class="hint">+${(x.train || 0).toFixed(2)} из ${P.TRAIN_MAX}${(x.train || 0) < P.TRAIN_MAX ? ' · ' + fmt(P.trainCost(e, x)) + '/день' : ' · максимум'}</span></label>
@@ -526,14 +532,14 @@ export class UI {
           <div><div class="row"><label>Загрузка</label><span class="effbar wide pink"><i style="width:${Math.round((x.workers / max) * 100)}%"></i></span></div>
             <div class="row"><label>Эффективность</label><span class="effbar wide"><i style="width:${Math.round(Math.min(1, (x.workers / max) * P.salaryEff(s, e) * P.wearFactor(x)) * 100)}%"></i></span></div>
             <div class="row"><label>Износ</label><span class="effbar wide red"><i style="width:${Math.round(x.wear * 100)}%"></i></span>
-              ${x.wear > 0.05 ? `<button class="btn small" data-act="repair" data-d="${x.id}" title="Бесплатно: из изношенного соберут меньше целого">🔧 ремонт (−${P.repairLoss(x)} шт.)</button>` : ''}</div>
-            ${P.equipOf(e) ? `<div class="row"><label>${P.equipOf(e).icon} ${P.equipOf(e).name}</label><b class="${(x.eqN || 0) < P.eqNeed(e, x) ? 'neg' : ''}">${x.eqN || 0} / ${P.eqNeed(e, x)} шт.</b>
+              ${x.wear > 0.05 ? `<button class="btn small" data-act="repair" data-d="${x.id}" title="Бесплатно: из изношенного соберут меньше целого">${ic('wrench')} Ремонт (−${P.repairLoss(x)} шт.)</button>` : ''}</div>
+            ${P.equipOf(e) ? `<div class="row"><label>${P.equipOf(e).name}</label><b class="${(x.eqN || 0) < P.eqNeed(e, x) ? 'neg' : ''}">${x.eqN || 0} / ${P.eqNeed(e, x)} шт.</b>
               ${(x.eqN || 0) < P.eqNeed(e, x) ? `<button class="btn small" data-act="eqfill" data-d="${x.id}">Докупить ${P.eqNeed(e, x) - (x.eqN || 0)} шт. — ${fmtShort((P.eqNeed(e, x) - (x.eqN || 0)) * P.unitPrice(e, x.eq || 3))}</button>` : ''}
               <span class="hint">1 шт. на ${P.equipOf(e).per} раб., служит ${P.equipOf(e).life} г.</span></div>` : '<p class="hint">Оборудование не требуется.</p>'}
             ${!x.on && x.workers ? '<p class="warn">Подразделение остановлено: рабочие получают 25% зарплаты.</p>' : ''}</div>
-          <div class="dprod">${x.recipe ? `<span class="big3">${GOODS[x.recipe].icon}</span>` : ''}${n === 0 ? `<div class="boss">${sp ? `<span class="face">${sp.face}</span><br>${esc(sp.name)}<br><span class="star sm">${sp.level}</span>` : '<span class="hint">без начальника</span>'}</div>` : ''}</div></div>`;
+          <div class="dprod">${x.recipe ? `<span class="big3 ge">${GOODS[x.recipe].icon}</span><div class="hint">${GOODS[x.recipe].name}</div>` : ''}${n === 0 ? `<div class="boss">${sp ? `${ava(sp.name)}<br>${esc(sp.name)}<br><span class="star sm">${sp.level}</span>` : '<span class="hint">без начальника</span>'}</div>` : ''}</div></div>`;
       }).join('')}
-      <div class="actions"><button class="btn primary" data-act="adddiv" ${e.divs.length >= P.MAX_DIVS || P.freeLevels(e) < 1 ? 'disabled' : ''}>➕ Новое подразделение (${fmt(P.divCost(e))})</button>
+      <div class="actions"><button class="btn primary" data-act="adddiv" ${e.divs.length >= P.MAX_DIVS || P.freeLevels(e) < 1 ? 'disabled' : ''}>${ic('plus')} Новое подразделение (${fmt(P.divCost(e))})</button>
         <span class="hint">Свободных уровней: <b>${P.freeLevels(e)}</b>${P.freeLevels(e) < 1 ? ' — копите опыт: он идёт за производство и продажи' : ''}</span></div>
       <p class="hint">Уровень подразделения увеличивает штат, выпуск и склад. Оборудование изнашивается только в работе — износ снижает выработку, ремонт его обнуляет.
       Чем выше качество оборудования, тем больше выпуск и лучше продукция, но нужна квалификация персонала: квалификация города ${(s.cityQual || 5).toFixed(2)} плюс обучение (до +${P.TRAIN_MAX}).
@@ -546,7 +552,7 @@ export class UI {
       ${h.map((x, n) => ({ x, day: this.s.day - h.length + n })).reverse().map(({ x, day }) => `<tr><td>${shortDate(day)}</td><td class="r">${fmt(x.rev)}</td><td class="r">${fmt(x.exp)}</td>
         <td class="r ${x.rev - x.exp < 0 ? 'neg' : ''}">${fmt(x.rev - x.exp)}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">Нет данных</td></tr>'}</table></div>
       <div><h3>Товары за 14 дней</h3><table class="grid"><tr><th>Товар</th><th class="r">Куплено</th><th class="r">Получено</th><th class="r">Произведено</th><th class="r">Потреблено</th><th class="r">Отгружено</th><th class="r">Продано</th></tr>
-      ${Object.entries(fl).map(([g, x]) => `<tr><td>${goodName(g)}</td><td class="r">${num(x.bought || 0)}</td><td class="r">${num(x.received || 0)}</td><td class="r">${num(x.made || 0)}</td>
+      ${Object.entries(fl).map(([g, x]) => `<tr><td>${gn(g)}</td><td class="r">${num(x.bought || 0)}</td><td class="r">${num(x.received || 0)}</td><td class="r">${num(x.made || 0)}</td>
         <td class="r">${num(x.used || 0)}</td><td class="r">${num(x.shipped || 0)}</td><td class="r">${num(x.sold || 0)}</td></tr>`).join('') || '<tr><td colspan="7" class="hint">Нет данных</td></tr>'}</table></div></div>`;
   }
 
@@ -563,15 +569,15 @@ export class UI {
     }
     return h + `</div><p class="hint">Направления: качество (+0,8 к качеству за уровень), объём производства (+5% выпуска), экономия материалов (−4% сырья, до −40%).</p>
       <table class="grid"><tr><th>Технология</th><th class="r">Качество</th><th class="r">Объём</th><th class="r">Экономия материалов</th></tr>
-      ${Object.keys(GOODS).filter(g => P.techLevel(s, g, 'q') + P.techLevel(s, g, 'vol') + P.techLevel(s, g, 'mat') > 0).map(g => `<tr><td>${goodName(g)}</td><td class="r">${P.techLevel(s, g, 'q')}</td><td class="r">${P.techLevel(s, g, 'vol')}</td><td class="r">${P.techLevel(s, g, 'mat')}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">Пока ничего не изучено</td></tr>'}</table>`;
+      ${Object.keys(GOODS).filter(g => P.techLevel(s, g, 'q') + P.techLevel(s, g, 'vol') + P.techLevel(s, g, 'mat') > 0).map(g => `<tr><td>${gn(g)}</td><td class="r">${P.techLevel(s, g, 'q')}</td><td class="r">${P.techLevel(s, g, 'vol')}</td><td class="r">${P.techLevel(s, g, 'mat')}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">Пока ничего не изучено</td></tr>'}</table>`;
   }
 
   ep_sites(e, s) {
     const list = Object.values(s.buildings).filter(b => b.builder === e.id);
     const crew = (P.workersOf(e) / Math.max(1, P.maxWorkers(e))) * P.salaryEff(s, e) * (1 + 0.5 * (P.levelOf(e) - 1)) * P.specBonus(s, e);
     return `<div class="kv" style="max-width:480px"><span>Скорость бригады</span><span>${crew.toFixed(2)} дня стройки за день</span></div>` + (list.length
-      ? `<table class="grid"><tr><th>Объект</th><th class="r">Готовность</th><th>Статус</th></tr>${list.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}">${bTitle(b)}</a></td>
-        <td class="r">${b.state === 'done' ? 'достроен' : pct(b.progress / b.buildDays)}</td><td>${b.state === 'build' ? (b.paused ? '<span class="warn">⛔ стоит</span>' : 'идёт') : '✅'}</td></tr>`).join('')}</table>`
+      ? `<table class="grid"><tr><th>Объект</th><th class="r">Готовность</th><th>Статус</th></tr>${list.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}" class="nm">${bHtml(b)}</a></td>
+        <td class="r">${b.state === 'done' ? 'достроен' : pct(b.progress / b.buildDays)}</td><td>${b.state === 'build' ? (b.paused ? '<span class="neg">стоит</span>' : 'идёт') : ic('check', 'pos')}</td></tr>`).join('')}</table>`
       : '<p class="hint">Строек нет. Выберите свободный участок в городе и в пункте «Кто строит» отметьте «Своими силами».</p>')
       + '<p class="hint">Закупайте стройматериалы на вкладке «Снабжение» или везите со своих заводов. Несколько строек делят бригаду.</p>';
   }
@@ -596,16 +602,16 @@ export class UI {
     const lock = d => (d.later ? '<div class="later">Эта сфера бизнеса в игре будет открыта позднее</div>'
       : d.minLevel && L < d.minLevel ? `<div class="req">Для постройки предприятия требуется ${d.minLevel}-й уровень компании (у вас ${L})</div>` : '');
     const locked = d => d.later || (d.minLevel && L < d.minLevel);
-    const icons = list => `<div class="ccicons">${list.map(g => `<span title="${GOODS[g].name}">${GOODS[g].icon}</span>`).join('')}</div>`;
+    const icons = list => `<div class="ccicons">${list.map(g => `<span class="ge" title="${GOODS[g].name}">${GOODS[g].icon}</span>`).join('')}</div>`;
     const typeGoods = t => { const T = ENTERPRISES[t]; return [...new Set(T.subs ? Object.keys(T.subs).flatMap(sb => sellsList(t, sb).length ? sellsList(t, sb) : recipesFor(t, sb)) : (sellsList(t).length ? sellsList(t) : recipesFor(t)))]; };
-    let h = `<div class="page-title"><span class="big">🏗️</span><h1>Создание предприятия</h1>
+    let h = `<div class="page-title"><span class="pt-ic">${ic('plus')}</span><h1>Создание предприятия</h1>
       <div class="acts"><span class="hint">Уровень компании: <span class="star sm">${L}</span> · предприятий ${Object.keys(s.enterprises).length} / ${hqLimit(s, 'manage')}</span></div></div>`;
     if (cr.step === 1) {
       h += `<div class="req2">Выберите тип предприятия</div><div class="ccards">`;
       for (const t in ENTERPRISES) {
         const T = ENTERPRISES[t];
         const minCost = T.subs ? Math.min(...Object.values(T.subs).map(x => x.cost || T.cost)) : T.cost;
-        h += `<button class="ccard ${locked(T) ? 'locked' : ''}" data-act="crtype" data-k="${t}" ${T.later ? 'disabled' : ''}><span class="cicon">${T.icon}</span>
+        h += `<button class="ccard ${locked(T) ? 'locked' : ''}" data-act="crtype" data-k="${t}" ${T.later ? 'disabled' : ''}><span class="cicon">${entTile(t, null, 'xl')}</span>
           <div><b>${T.name}</b><small>${T.desc}</small><i>Инвестиции: от ${fmtShort(minCost)}</i>${lock(T)}${icons(typeGoods(t).slice(0, 26))}</div></button>`;
       }
       return h + '</div>';
@@ -616,17 +622,17 @@ export class UI {
       for (const sb in T.subs) {
         const D = defOf(cr.type, sb);
         const list = sellsList(cr.type, sb).length ? sellsList(cr.type, sb) : D.groups !== undefined ? Object.keys(GOODS).filter(g => P.inDepot(g) && (!D.groups || D.groups.includes(GOODS[g].group))) : recipesFor(cr.type, sb);
-        h += `<button class="ccard ${locked(D) ? 'locked' : ''}" data-act="crsub" data-k="${sb}"><span class="cicon">${T.icon}<em>${D.icon}</em></span>
+        h += `<button class="ccard ${locked(D) ? 'locked' : ''}" data-act="crsub" data-k="${sb}"><span class="cicon">${entTile(cr.type, sb, 'xl')}</span>
           <div><b>${D.name}</b><small>${D.desc}</small><i>Инвестиции: от ${fmtShort(D.cost)}</i>${lock(D)}${icons(list.slice(0, 40))}</div></button>`;
       }
-      return h + `</div><div class="actions"><button class="btn" data-act="crback">⏪ Назад</button></div>`;
+      return h + `</div><div class="actions"><button class="btn" data-act="crback">${ic('left')} Назад</button></div>`;
     }
     // шаг 3: подтверждение
     const D = defOf(cr.type, cr.sub);
     const options = recipesFor(cr.type, cr.sub);
     const hosts = D.sells ? P.shopHosts(s) : [];
     const err = locked(D) ? 'Недостаточный уровень компании' : s.money < D.cost ? `Не хватает денег: нужно ${fmt(D.cost)}` : D.sells && !hosts.length ? 'Нет свободных коммерческих помещений' : null;
-    h += `<div class="ccard wide static"><span class="cicon">${T.icon}${cr.sub ? `<em>${D.icon}</em>` : ''}</span><div><b>${D.name}</b><small>${D.desc}</small>
+    h += `<div class="ccard wide static"><span class="cicon">${entTile(cr.type, cr.sub, 'xl')}</span><div><b>${D.name}</b><small>${D.desc}</small>
         <div class="kv" style="max-width:520px"><span>Инвестиции</span><span>${fmt(D.cost)}</span><span>Рабочих в подразделении</span><span>${D.workers}</span>
         <span>Склад</span><span>${num(D.storage || 0)} ед.</span><span>Содержание</span><span>${fmt(D.upkeep)}/день</span></div>
         <div class="row"><label>Название</label><input type="text" id="crName" maxlength="40" value="${esc(D.name)}" style="flex:1;max-width:320px"></div>
@@ -634,7 +640,7 @@ export class UI {
         ${D.sells ? (hosts.length ? `<div class="row"><label>Помещение</label><select id="crHost">${hosts.map(b => { const a = P.catchment(s, b, 3, cr.type === 'shop' ? 'shop:' + cr.sub : cr.type); return `<option value="${b.id}" ${b.id === cr.hostId ? 'selected' : ''}>Дом №${b.id} (${b.i}:${b.j}) — покупателей ~${a.pop}, конкурентов ${a.comp}, ${b.owner === 'player' ? 'ваш, без аренды' : 'аренда ' + b.units.comm.rent + ' ₽/день'}</option>`; }).join('')}</select></div>`
           : '<p class="warn">Нужно коммерческое помещение на первом этаже жилого дома. Постройте жилой дом или дождитесь, пока конкуренты построят.</p>') : ''}
         ${err ? `<p class="warn">${err}</p>` : ''}
-        <div class="actions"><button class="btn" data-act="crback">⏪ Назад</button><button class="btn primary" data-act="crcreate" ${err ? 'disabled' : ''}>Создать предприятие</button></div></div></div>`;
+        <div class="actions"><button class="btn" data-act="crback">${ic('left')} Назад</button><button class="btn primary" data-act="crcreate" ${err ? 'disabled' : ''}>Создать предприятие</button></div></div></div>`;
     return h;
   }
 
@@ -654,7 +660,7 @@ export class UI {
       case 'ffloors': this.form.floors = +t.dataset.v; this.renderSide(true); break;
       case 'order': {
         const f = this.form, r = run(() => G.order(s, f.type, f.floors, f.contractor, this.sel.i, this.sel.j));
-        if (r?.building) { this.toast('🏗️ Стройка началась!'); this.app.world.floatText(this.sel.i, this.sel.j, '🏗️ Стройка', 'info'); }
+        if (r?.building) { this.toast('🏗️ Стройка началась!'); this.app.world.floatText(this.sel.i, this.sel.j, 'Стройка началась', 'info'); }
         this.renderSide(true); break;
       }
       case 'cancel': if (confirm('Отменить стройку? Деньги за выполненные работы не вернутся.')) { run(() => G.cancelBuild(s, b.id)); this.renderSide(true); } break;
@@ -728,7 +734,8 @@ export class UI {
       case 'cdel': this.app.act(() => P.removeContract(s, +t.dataset.id)); this.renderSide(true); this.refreshWin(); break;
       case 'wtab': this.winTab = t.dataset.tab; this.renderPage(); break;
       case 'cotab': this.coTab = t.dataset.tab; this.renderPage(); this.markNav(); break;
-      case 'tocity': this.showCity(); break;
+      case 'tocity': ev.preventDefault(); this.showCity(); break;
+      case 'gopage': ev.preventDefault(); this.openPage(t.dataset.k, t.dataset.tab); break;
       case 'entfilter': this.entFilter = t.dataset.k || null; this.renderPage(); break;
       case 'finsub': ev.preventDefault(); this.finSub = t.dataset.k; this.txPage = 0; this.renderPage(); break;
       case 'txpage': this.txPage = +t.dataset.p; this.renderPage(); break;
@@ -834,16 +841,17 @@ export class UI {
   }
 
   titled(name) {
-    const t = { market: ['💹', 'Рынок'], contracts: ['🚚', 'Поставки'], rating: ['🏆', 'Рейтинг компаний'], quests: ['📝', 'Задания'], help: ['❔', 'Как играть'] }[name];
-    return `<div class="page-title"><span class="big">${t[0]}</span><h1>${t[1]}</h1></div>${this[`win_${name}`](this.s)}`;
+    const t = { market: ['trend', 'Рынок'], contracts: ['truck', 'Поставки'], rating: ['trophy', 'Рейтинг компаний'], quests: ['tasks', 'Задания'], help: ['help', 'Как играть'] }[name];
+    return `<div class="page-title"><span class="pt-ic">${ic(t[0])}</span><h1>${t[1]}</h1></div>${this[`win_${name}`](this.s)}`;
   }
 
   // ---------- страница компании ----------
   page_company(s) {
-    const tabs = [['main', 'Компания'], ['ent', 'Предприятия'], ['staff', 'Специалисты'], ['finance', 'Финансы'], ['reports', 'Отчёты']];
-    return `<div class="page-title"><span class="big">🏢</span><h1>Компания ${esc(s.company)}</h1>
-        <div class="acts"><button class="btn small" data-act="rename">✎ Переименовать</button></div></div>
-      <div class="ftabs">${tabs.map(([k, n]) => `<button data-act="cotab" data-tab="${k}" class="${this.coTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+    // Разделы компании выбираются в верхнем меню — отдельных вкладок на странице нет
+    const t = { main: ['briefcase', esc(s.company)], ent: ['factory', 'Предприятия'], staff: ['users', 'Специалисты'], finance: ['wallet', 'Финансы'], reports: ['report', 'Отчёты'] }[this.coTab];
+    const acts = this.coTab === 'main' ? `<button class="btn icon" data-act="rename" title="Переименовать компанию">${ic('pencil')}</button>`
+      : this.coTab === 'ent' ? `<button class="btn primary" data-act="newent">${ic('plus')} Создать предприятие</button>` : '';
+    return `<div class="page-title"><span class="pt-ic">${ic(t[0])}</span><h1>${t[1]}</h1>${acts ? `<div class="acts">${acts}</div>` : ''}</div>
       ${this[`co_${this.coTab}`](s)}`;
   }
 
@@ -870,14 +878,14 @@ export class UI {
     const eff = this.efficiency();
     const tiles = [
       ...blds.map(b => `<button class="tile" data-act="goplot" data-i="${b.i}" data-j="${b.j}" title="${bTitle(b)}${b.state === 'build' ? ' — стройка ' + pct(b.progress / b.buildDays) : ''}">
-        ${b.state === 'build' ? '🏗️' : BUILDINGS[b.type].icon}<span class="n">${b.floors}</span>${b.state === 'build' && b.paused ? '<span class="w">⛔</span>' : ''}</button>`),
-      ...ents.map(e => `<button class="tile" data-act="openent" data-id="${e.id}" title="${esc(e.name)}">${entDef(e).icon}
-        <span class="n">${e.lvl || 1}${P.freeLevels(e) ? '+' + P.freeLevels(e) : ''}</span>${this.entProblem(e) ? '<span class="w">⚠️</span>' : ''}</button>`),
+        ${bTile(b.state === 'build' ? 'site' : b.type, 'lg')}<span class="n">${b.floors}</span>${b.state === 'build' && b.paused ? `<span class="w">${ic('stop')}</span>` : ''}</button>`),
+      ...ents.map(e => `<button class="tile" data-act="openent" data-id="${e.id}" title="${esc(e.name)}">${eTile(e, 'lg')}
+        <span class="n">${e.lvl || 1}${P.freeLevels(e) ? '+' + P.freeLevels(e) : ''}</span>${this.entProblem(e) ? `<span class="w">${ic('alert')}</span>` : ''}</button>`),
     ].join('');
     const hq = Object.keys(HQ).map(k => {
       const l = s.hq[k] || 1, used = { staff: P.staffTotal(s), manage: ents.length, prod: P.products(s).size, build: blds.filter(b => b.state === 'build').length, finance: s.money, mining: P.minedTypes(s).size }[k];
       return `<div class="dept"><span class="star">${l}</span><div><div class="nm">${HQ[k].name}</div><div class="lim ${HQ[k].money && used > hqLimit(s, k) ? 'neg' : ''}">${HQ[k].label}: ${HQ[k].money ? fmtShort(used) + ' / ' + fmtShort(hqLimit(s, k)) : num(used) + ' / ' + num(hqLimit(s, k))}</div></div>
-        ${l < HQ_MAX ? `<button class="btn small" data-act="hq" data-k="${k}" ${s.money < hqUpgradeCost(l) ? 'disabled' : ''} title="Повысить уровень">⬆ ${fmtShort(hqUpgradeCost(l))}</button>` : ''}</div>`;
+        ${l < HQ_MAX ? `<button class="btn small" data-act="hq" data-k="${k}" ${s.money < hqUpgradeCost(l) ? 'disabled' : ''} title="Повысить уровень">${ic('up')} ${fmtShort(hqUpgradeCost(l))}</button>` : ''}</div>`;
     }).join('');
     return `<div class="co-grid">
       <div class="statlist">
@@ -896,8 +904,7 @@ export class UI {
           <span>Кредит:</span><span>${fmt(s.loan)}</span>
         </div>
       </div>
-      <div class="profile">Компания видна в рейтинге всем конкурентам
-        <div class="ava">🧑‍💼</div>${esc(s.company)}
+      <div class="profile"><span class="avatar xl">${ic('briefcase')}</span><br><b>${esc(s.company)}</b><div class="hint">видна в рейтинге всем конкурентам</div>
         <div style="margin-top:6px">Эффективность: <span class="eff"><i style="width:${Math.round(eff * 100)}%"></i></span> ${pct(eff)}</div>
         <div style="margin-top:6px"><span class="star" title="Уровень компании">${this.companyLevel()}</span></div>
         <div class="xpwrap" title="Опыт компании: ${num(s.compXp || 0)} из ${num(companyXpNeed(s.compLvl || 1))}">Опыт: <span class="effbar"><i style="width:${Math.round(((s.compXp || 0) / companyXpNeed(s.compLvl || 1)) * 100)}%"></i></span></div>
@@ -907,10 +914,9 @@ export class UI {
       <div class="hq"><h2>Штаб-квартира</h2>${hq}
         <p class="hint">Отделы задают лимиты: сколько можно нанять людей, держать предприятий, выпускать разных продуктов и вести строек одновременно.</p></div>
       <div>
-        <div class="city-row"><span class="nm">🏙️ ${esc(s.cityName)}</span>
-          <span title="Выручка за неделю">💵 ${fmtShort(rev)}</span><span title="Прибыль за неделю">📈 ${fmtShort(profit)}</span><span title="Активы">💰 ${fmtShort(assets)}</span>
-          <button class="btn small" data-act="tocity">🌐 В город</button></div>
-        <div class="icons">${tiles || '<span class="hint">Пока пусто. Откройте город 🌐 и закажите стройку на свободном участке или создайте предприятие во вкладке «Предприятия».</span>'}</div>
+        <div class="city-row"><a href="#" class="nm" data-act="tocity" title="Открыть карту города">${ic('city')} ${esc(s.cityName)}</a>
+          <span title="Выручка за неделю">${ic('cash')} ${fmtShort(rev)}</span><span title="Прибыль за неделю">${ic(profit >= 0 ? 'trend' : 'trendDown')} ${fmtShort(profit)}</span><span title="Активы">${ic('coins')} ${fmtShort(assets)}</span></div>
+        <div class="icons">${tiles || '<span class="hint">Пока пусто. Откройте город и закажите стройку на свободном участке или создайте предприятие в разделе «Предприятия».</span>'}</div>
       </div>
       <div class="medals">
         <div class="medal" title="Место в рейтинге">${place}<small>место</small></div>
@@ -927,12 +933,12 @@ export class UI {
     const s = this.s, rows = [];
     for (const b of Object.values(s.buildings).filter(G.isPlayer)) {
       const w = weekOf(b.hist);
-      rows.push({ key: 'b:' + b.type, icon: b.state === 'build' ? '🏗️' : BUILDINGS[b.type].icon, kind: BUILDINGS[b.type].name, name: bTitle(b).replace(/^\S+ /, ''),
+      rows.push({ key: 'b:' + b.type, icon: bTile(b.state === 'build' ? 'site' : b.type, 'sm'), kind: BUILDINGS[b.type].name, name: bTitle(b),
         link: `data-act="goplot" data-i="${b.i}" data-j="${b.j}"`, level: b.floors,
         eff: b.state === 'build' ? b.progress / b.buildDays : BUILDINGS[b.type].category === 'social' ? 1 : G.occRate(b),
-        products: b.state === 'build' ? `<span class="hint">стройка ${pct(b.progress / b.buildDays)}</span>` : Object.keys(b.units).map(t => `<span title="${UNITS[t].name}">${UNITS[t].icon}</span>`).join('') || '🛡️',
+        products: b.state === 'build' ? `<span class="hint">стройка ${pct(b.progress / b.buildDays)}</span>` : Object.keys(b.units).map(t => `<span title="${UNITS[t].name}">${unitIc(t)}</span>`).join('') || `<span title="Социальное здание">${ic('shield')}</span>`,
         rev: w.rev, exp: w.exp, assets: b.state === 'done' ? G.marketValue(b) : G.invested(b),
-        problem: b.state === 'build' && b.paused ? '⛔ Стройка стоит' : b.state === 'done' && Object.keys(b.units).length && G.occRate(b) < 0.5 ? '% Мало арендаторов — снизьте аренду' : null });
+        problem: b.state === 'build' && b.paused ? 'Стройка стоит' : b.state === 'done' && Object.keys(b.units).length && G.occRate(b) < 0.5 ? 'Мало арендаторов — снизьте аренду' : null });
     }
     for (const e of Object.values(s.enterprises)) {
       const w = weekOf(e.hist);
@@ -941,9 +947,9 @@ export class UI {
         : e.type === 'construction' || e.type === 'warehouse' ? Object.keys(e.stock) : [...new Set(e.divs.map(x => x.recipe).filter(Boolean))];
       let stock = 0;
       for (const g in e.stock) stock += e.stock[g].qty * s.prices[g] * 0.6;
-      rows.push({ key: 'e:' + e.type + ':' + e.sub, icon: d.icon, kind: d.name, name: esc(e.name), link: `data-act="openent" data-id="${e.id}"`,
+      rows.push({ key: 'e:' + e.type + ':' + e.sub, icon: eTile(e, 'sm'), kind: d.name, name: esc(e.name), link: `data-act="openent" data-id="${e.id}"`,
         level: e.lvl || 1, free: P.freeLevels(e), eff: Math.min(1, (P.workersOf(e) / Math.max(1, P.maxWorkers(e))) * P.salaryEff(this.s, e) * P.specBonus(this.s, e)),
-        products: goods.map(g => `<span title="${GOODS[g].name}">${GOODS[g].icon}</span>`).join(''), rev: w.rev, exp: w.exp,
+        products: goods.map(g => `<span class="ge" title="${GOODS[g].name}">${GOODS[g].icon}</span>`).join(''), rev: w.rev, exp: w.exp,
         assets: Math.round(e.invested * 0.6 + stock), problem: this.entProblem(e), contracts: s.contracts.some(c => c.from === e.id || c.to === e.id) });
     }
     return rows;
@@ -953,16 +959,15 @@ export class UI {
     const rows = this.companyUnits();
     const kinds = [...new Map(rows.map(r => [r.key, r])).values()];
     const list = this.entFilter ? rows.filter(r => r.key === this.entFilter) : rows;
-    let h = `<div class="filters"><button class="tile ${!this.entFilter ? 'on' : ''}" data-act="entfilter" data-k="" title="Все">🗂️</button>
-      ${kinds.map(r => `<button class="tile ${this.entFilter === r.key ? 'on' : ''}" data-act="entfilter" data-k="${r.key}" title="${r.kind}">${r.icon}</button>`).join('')}</div>`;
+    let h = rows.length ? `<div class="filters"><button class="fchip ${!this.entFilter ? 'on' : ''}" data-act="entfilter" data-k="">${ic('layers')} Все <b>${rows.length}</b></button>
+      ${kinds.map(r => `<button class="fchip ${this.entFilter === r.key ? 'on' : ''}" data-act="entfilter" data-k="${r.key}">${r.icon} ${r.kind} <b>${rows.filter(x => x.key === r.key).length}</b></button>`).join('')}</div>` : '';
     if (!rows.length) h += '<p class="hint">У компании пока нет предприятий и зданий.</p>';
     else h += `<table class="grid"><tr><th>Город</th><th>Предприятие</th><th>Уровень</th><th>Эффект.</th><th>Продукты</th><th class="r">Прибыль (7 дн.)</th><th class="r">Активы</th><th>Проблемы</th></tr>
-      ${list.map(r => `<tr><td>🏙️ ${esc(s.cityName)}</td><td><span class="ico">${r.icon}</span> <a href="#" ${r.link}>${r.name}</a></td>
+      ${list.map(r => `<tr><td>${esc(s.cityName)}</td><td><a href="#" ${r.link} class="nm">${r.icon}${r.name}</a></td>
         <td><span class="lvlwrap"><span class="star sm">${r.level}</span>${r.free ? `<b class="free">+${r.free}</b>` : ""}</span></td><td><span class="effbar"><i style="width:${Math.round(r.eff * 100)}%"></i></span></td>
         <td class="prods">${r.products}</td><td class="r ${r.rev - r.exp >= 0 ? '' : 'neg'}">${fmt(r.rev - r.exp)}</td><td class="r">${fmt(r.assets)}</td>
-        <td>${r.problem ? `<span title="${esc(r.problem)}">${r.problem.startsWith('⛔') ? '⛔' : r.problem.startsWith('%') ? '📉' : '⚠️'}</span>` : ''}${r.contracts ? ' <span title="Есть поставки">🚚</span>' : ''}</td></tr>`).join('')}</table>`;
-    return h + `<div class="actions"><button class="btn primary" data-act="newent">➕ Создать предприятие</button>
-      <span class="hint">Предприятий ${Object.keys(s.enterprises).length} / ${hqLimit(s, 'manage')}</span></div>`;
+        <td>${r.problem ? `<span class="warnic" title="${esc(r.problem)}">${ic('alert')}</span>` : ''}${r.contracts ? `<span class="hint" title="Есть поставки">${ic('truck')}</span>` : ''}</td></tr>`).join('')}</table>`;
+    return h + `<p class="hint">Предприятий ${Object.keys(s.enterprises).length} / ${hqLimit(s, 'manage')} (лимит управляющего отдела штаб-квартиры).</p>`;
   }
 
   // ---------- вкладка «Специалисты» ----------
@@ -973,26 +978,26 @@ export class UI {
     h += specs.length ? `<table class="grid"><tr><th>Работник</th><th>Уровень</th><th class="r">Зарплата</th><th>Место работы</th><th>Профессия</th><th>Характеристики</th><th></th></tr>
       ${specs.map(x => {
         const opts = ents.filter(e => e.type === x.type);
-        return `<tr><td><span class="face">${x.face}</span> <b>${esc(x.name)}</b></td>
+        return `<tr><td><span class="nm">${ava(x.name)}<b>${esc(x.name)}</b></span></td>
           <td><span class="star sm">${x.level}</span> <span class="xp" title="Опыт до следующего уровня"><i style="width:${Math.round((x.xp / (x.level * 15)) * 100)}%"></i></span></td>
           <td class="r">${fmt(specSalary(x.level))}/день</td>
           <td><select data-act="assign" data-id="${x.id}"><option value="">— не назначен —</option>${opts.map(e => `<option value="${e.id}" ${x.job === e.id ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></td>
-          <td>${x.prof}</td><td><span title="Производительность">⚡ +${x.level * 3}%</span> · <span title="Качество продукции">✨ +${(x.level * 0.08).toFixed(2)}</span></td>
+          <td>${x.prof}</td><td><span title="Производительность">${ic('zap')} +${x.level * 3}%</span> &nbsp; <span title="Качество продукции">${ic('sparkle')} +${(x.level * 0.08).toFixed(2)}</span></td>
           <td><button class="btn small danger" data-act="fire" data-id="${x.id}">Уволить</button></td></tr>`;
       }).join('')}
       <tr><td></td><td><b>Итого:</b></td><td class="r"><b>${fmt(specs.reduce((a, x) => a + specSalary(x.level), 0))}/день</b></td><td colspan="4"></td></tr></table>`
       : '<p class="hint">Специалистов пока нет. Наймите их на бирже ниже — каждый ускоряет и улучшает своё предприятие.</p>';
     h += `<h3>Биржа специалистов <small class="hint">обновляется каждые 7 дней</small></h3>
       <table class="grid"><tr><th>Кандидат</th><th>Уровень</th><th>Профессия</th><th class="r">Зарплата</th><th class="r">Подбор</th><th></th></tr>
-      ${(s.candidates || []).map(c => `<tr><td><span class="face">${c.face}</span> ${esc(c.name)}</td><td><span class="star sm">${c.level}</span></td><td>${c.prof} <span class="hint">(${ENTERPRISES[c.type].name})</span></td>
+      ${(s.candidates || []).map(c => `<tr><td><span class="nm">${ava(c.name)}${esc(c.name)}</span></td><td><span class="star sm">${c.level}</span></td><td>${c.prof} <span class="hint">(${ENTERPRISES[c.type].name})</span></td>
         <td class="r">${fmt(specSalary(c.level))}/день</td><td class="r">${fmt(P.hireFee(c))}</td>
         <td><button class="btn small primary" data-act="hire" data-id="${c.id}" ${s.money < P.hireFee(c) || G.companyLevel(s) < FEATURES.specialists ? 'disabled' : ''}>Нанять</button></td></tr>`).join('')}</table>
-      ${G.companyLevel(s) < FEATURES.specialists ? `<p class="warn">🔒 Нанимать специалистов можно с ${FEATURES.specialists}-го уровня компании.</p>` : ''}
+      ${G.companyLevel(s) < FEATURES.specialists ? `<p class="warn">${ic('lock')} Нанимать специалистов можно с ${FEATURES.specialists}-го уровня компании.</p>` : ''}
       <p class="hint">Специалист работает на одном предприятии своей профессии: +3% производительности и +0,08 к качеству за уровень. Опыт растёт каждый день работы.</p>`;
     if (ents.length) {
       h += `<h3>Рабочие <small class="hint">${num(P.staffTotal(s))} / ${num(hqLimit(s, 'staff'))} · средняя зарплата в городе ${s.marketSalary} ₽</small></h3>
         <table class="grid"><tr><th>Предприятие</th><th class="r">Работают</th><th class="r">Нужно</th><th>Зарплата, ₽/день</th><th class="r">Эффективность</th></tr>
-        ${ents.map(e => `<tr><td><a href="#" data-act="openent" data-id="${e.id}">${entName(e)}</a></td><td class="r">${P.workersOf(e)}</td><td class="r">${P.targetOf(e)} / ${P.maxWorkers(e)}</td>
+        ${ents.map(e => `<tr><td><a href="#" data-act="openent" data-id="${e.id}">${entHtml(e)}</a></td><td class="r">${P.workersOf(e)}</td><td class="r">${P.targetOf(e)} / ${P.maxWorkers(e)}</td>
           <td><input type="number" min="1" value="${e.salary}" data-act="esalary" data-id="${e.id}" style="width:80px"></td><td class="r">${pct(P.salaryEff(s, e))}</td></tr>`).join('')}</table>`;
     }
     return h;
@@ -1002,7 +1007,7 @@ export class UI {
   co_finance(s) {
     const subs = [['accounts', 'счета'], ['credits', 'кредиты'], ['credhist', 'кредитная история'], ['weekly', 'еженедельные платежи'], ['statement', 'выписка по счетам'], ['parties', 'контрагенты компании']];
     this.finSub ||= 'accounts';
-    let h = `<div class="sublinks">${subs.map(([k, n]) => `<a href="#" data-act="finsub" data-k="${k}" class="${this.finSub === k ? 'on' : ''}">${n}</a>`).join(' | ')}</div>`;
+    let h = `<div class="sublinks">${subs.map(([k, n]) => `<a href="#" data-act="finsub" data-k="${k}" class="${this.finSub === k ? 'on' : ''}">${n}</a>`).join('')}</div>`;
     switch (this.finSub) {
       case 'accounts':
         h += `<table class="grid"><tr><th>Тип</th><th>Номер</th><th>Валюта</th><th class="r">Сумма</th><th class="r">Предприятий</th><th>Статус</th></tr>
@@ -1055,13 +1060,12 @@ export class UI {
 
   // ---------- вкладка «Отчёты» ----------
   co_reports(s) {
-    const reps = [['income', '💲', 'Доходы, расходы'], ['assets', '🪙', 'Активы, обязательства'], ['charts', '📊', 'Графические отчёты'], ['byEnt', '🏭', 'По предприятиям'],
-      ['byInd', '🛠️', 'По отраслям'], ['goods', '📦', 'Товарооборот компании'], ['statement', '🧾', 'Выписка по счёту'], ['geo', '🗺️', 'География компании'],
-      ['eod', '📅', 'Остаток по счёту на конец дня'], ['news', '📰', 'Новости компании']];
-    this.rep ||= 'income';
-    const cur = reps.find(r => r[0] === this.rep);
-    return `<div class="repicons">${reps.map(([k, i, n]) => `<button class="${this.rep === k ? 'on' : ''}" data-act="rep" data-k="${k}" title="${n}">${i}</button>`).join('')}</div>
-      <h2 class="reptitle">${cur[2]}</h2>${this[`rep_${this.rep}`](s)}`;
+    // выписка по счёту — в «Финансах», здесь её не дублируем
+    const reps = [['income', 'cash', 'Доходы и расходы'], ['assets', 'coins', 'Активы'], ['charts', 'pie', 'Графики'], ['byEnt', 'factory', 'По предприятиям'],
+      ['byInd', 'layers', 'По отраслям'], ['goods', 'box', 'Товарооборот'], ['geo', 'map', 'География'], ['eod', 'calendar', 'Остаток на конец дня'], ['news', 'news', 'Новости']];
+    if (!reps.some(r => r[0] === this.rep)) this.rep = 'income';
+    return `<div class="seg">${reps.map(([k, i, n]) => `<button class="${this.rep === k ? 'on' : ''}" data-act="rep" data-k="${k}">${ic(i)}<span>${n}</span></button>`).join('')}</div>
+      ${this[`rep_${this.rep}`](s)}`;
   }
 
   // сумма статьи по истории: дни [from, to) от конца
@@ -1130,9 +1134,9 @@ export class UI {
     const rows = this.companyUnits();
     const hqCost = this.histSum('exp', 'hq', 0, 7);
     return `<table class="grid"><tr><th>Город</th><th>Предприятие</th><th class="r">Выручка</th><th class="r">Затраты</th><th class="r">Прибыль</th><th class="r">Активы</th><th class="r">Долги</th></tr>
-      ${rows.map(r => `<tr><td>🏙️ ${esc(s.cityName)}</td><td><span class="lvlwrap"><span class="star sm">${r.level}</span>${r.free ? `<b class="free">+${r.free}</b>` : ""}</span> <span class="ico">${r.icon}</span> <a href="#" ${r.link}>${r.name}</a></td>
+      ${rows.map(r => `<tr><td>${esc(s.cityName)}</td><td><span class="lvlwrap"><span class="star sm">${r.level}</span>${r.free ? `<b class="free">+${r.free}</b>` : ""}</span> <a href="#" ${r.link} class="nm">${r.icon}${r.name}</a></td>
         <td class="r">${fmt(r.rev)}</td><td class="r">${fmt(r.exp)}</td><td class="r ${r.rev - r.exp < 0 ? 'neg' : ''}">${fmt(r.rev - r.exp)}</td><td class="r">${fmt(r.assets)}</td><td class="r">—</td></tr>`).join('')}
-      <tr><td>🏙️ ${esc(s.cityName)}</td><td><span class="star sm">${Math.max(...Object.values(s.hq))}</span> <span class="ico">🏛️</span> Штаб-квартира</td><td class="r">${fmt(0)}</td><td class="r">${fmt(hqCost)}</td>
+      <tr><td>${esc(s.cityName)}</td><td><span class="star sm">${Math.max(...Object.values(s.hq))}</span> <span class="nm"><span class="ti sm" style="--c:#475569">${ic('bank')}</span>Штаб-квартира</span></td><td class="r">${fmt(0)}</td><td class="r">${fmt(hqCost)}</td>
         <td class="r ${hqCost ? 'neg' : ''}">${fmt(-hqCost)}</td><td class="r">${fmt(G.assets(s).hq)}</td><td class="r">—</td></tr></table>
       <p class="hint">Выручка и затраты — за последние 7 дней.</p>`;
   }
@@ -1144,7 +1148,7 @@ export class UI {
       x.n++; x.rev += r.rev; x.exp += r.exp; x.assets += r.assets; m.set(r.key, x);
     }
     return `<table class="grid"><tr><th>Тип предприятий</th><th class="r">Выручка</th><th class="r">Затраты</th><th class="r">Прибыль</th><th class="r">Активы</th></tr>
-      ${[...m.values()].sort((a, b) => b.assets - a.assets).map(x => `<tr><td><span class="ico">${x.icon}</span> ${x.kind} <span class="hint">(${x.n})</span></td><td class="r">${fmt(x.rev)}</td><td class="r">${fmt(x.exp)}</td>
+      ${[...m.values()].sort((a, b) => b.assets - a.assets).map(x => `<tr><td><span class="nm">${x.icon}${x.kind}</span> <span class="hint">(${x.n})</span></td><td class="r">${fmt(x.rev)}</td><td class="r">${fmt(x.exp)}</td>
         <td class="r ${x.rev - x.exp < 0 ? 'neg' : ''}">${fmt(x.rev - x.exp)}</td><td class="r">${fmt(x.assets)}</td></tr>`).join('') || '<tr><td colspan="5" class="hint">Пусто</td></tr>'}</table>`;
   }
 
@@ -1158,7 +1162,7 @@ export class UI {
       <tr><th class="r">Куплено</th><th class="r">Произведено</th><th class="r">Потреблено</th><th class="r">Продано оптом</th><th class="r">Продано в розницу</th></tr>
       ${groups[this.goodsGroup].map(g => {
         const b = sumF(g, 'bought'), m = sumF(g, 'made'), u = sumF(g, 'used'), w = sumF(g, 'whole'), r = sumF(g, 'retail'), bal = b + m - u - w - r;
-        return `<tr><td>${goodName(g)}</td><td class="r">${num(stock(g))}</td><td class="r">${num(b)}</td><td class="r">${num(m)}</td><td class="r">${num(u)}</td><td class="r">${num(w)}</td><td class="r">${num(r)}</td>
+        return `<tr><td>${gn(g)}</td><td class="r">${num(stock(g))}</td><td class="r">${num(b)}</td><td class="r">${num(m)}</td><td class="r">${num(u)}</td><td class="r">${num(w)}</td><td class="r">${num(r)}</td>
           <td class="r ${bal > 0 ? 'pos' : bal < 0 ? 'neg' : ''}">${bal > 0 ? '+' : ''}${num(bal)}</td></tr>`;
       }).join('')}</table></div><p class="hint">За последние 7 дней. Перевозки между своими предприятиями не учитываются.</p>`;
   }
@@ -1169,9 +1173,9 @@ export class UI {
     const a = G.assets(s), total = Object.entries(a).filter(([k]) => k !== 'loan').reduce((x, [, v]) => x + v, 0);
     const rev = this.histSum('inc', null, 0, 7), exp = this.histSum('exp', null, 0, 7);
     return `<div class="twocol"><div><h3>Финансы</h3><table class="grid"><tr><th>Город</th><th class="r">Активы</th><th class="r">Выручка (7 дн.)</th><th class="r">Прибыль</th></tr>
-      <tr><td>🏙️ ${esc(s.cityName)}</td><td class="r">${fmt(total)} <small class="hint">100%</small></td><td class="r">${fmt(rev)} <small class="hint">100%</small></td><td class="r">${fmt(rev - exp)}</td></tr></table></div>
+      <tr><td>${esc(s.cityName)}</td><td class="r">${fmt(total)} <small class="hint">100%</small></td><td class="r">${fmt(rev)} <small class="hint">100%</small></td><td class="r">${fmt(rev - exp)}</td></tr></table></div>
       <div><h3>Рабочие</h3><table class="grid"><tr><th>Город</th><th class="r">Доля</th><th class="r">Рабочие</th></tr>
-      <tr><td>🏙️ ${esc(s.cityName)}</td><td class="r">100%</td><td class="r">${num(P.staffTotal(s) + (s.specs || []).length)}</td></tr></table></div></div>
+      <tr><td>${esc(s.cityName)}</td><td class="r">100%</td><td class="r">${num(P.staffTotal(s) + (s.specs || []).length)}</td></tr></table></div></div>
       <p class="hint">Сейчас компания работает в одном городе. Другие города появятся вместе с картой мира.</p>`;
   }
 
@@ -1238,10 +1242,9 @@ export class UI {
   page_city(s) {
     this.cityTab ||= 'map';
     const tabs = [['info', 'Город'], ['map', 'Карта'], ['projects', 'Проекты'], ['ents', 'Предприятия'], ['analytics', 'Аналитика']];
-    const level = Math.min(5, 1 + Math.floor((s.city.population || 0) / 2000));
-    return `<div class="page-title"><span class="big">🏙️</span><h1>Город ${esc(s.cityName)}</h1>
-        <div class="acts mayor"><div><span>❔</span><small>Мэр<br>нет мэра</small></div><div><span>❔</span><small>Зам<br>нет зама</small></div>
-        <span class="star" title="Уровень города">${level}</span></div></div>
+    return `<div class="page-title"><span class="pt-ic">${ic('city')}</span><h1>Город ${esc(s.cityName)}</h1>
+        <button class="btn icon" data-act="renamecity" title="Переименовать город">${ic('pencil')}</button>
+        <div class="acts"><span class="hint">Уровень города</span><span class="star" title="Уровень города">${s.city.level || 1}</span></div></div>
       <div class="ftabs">${tabs.map(([k, n]) => `<button data-act="citytab" data-k="${k}" class="${this.cityTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
       ${this[`city_${this.cityTab}`](s)}`;
   }
@@ -1251,10 +1254,8 @@ export class UI {
     return `<div class="mapframe" id="mapSlot"></div>
       <p class="hint">Клик по участку — информация и стройка. Мышь: левая кнопка — двигать, правая — вращать, колесо — масштаб.
         Круги показывают зоны охвата: зелёные — ваши здания, красные — конкурентов.</p>
-      <label class="chk"><input type="checkbox" data-act="cover" data-k="hospital" ${c.hospital ? 'checked' : ''}> 🏥 Больница</label>
-      <label class="chk"><input type="checkbox" data-act="cover" data-k="police" ${c.police ? 'checked' : ''}> 🚓 Полиция</label>
-      <label class="chk"><input type="checkbox" data-act="cover" data-k="school" ${c.school ? 'checked' : ''}> 🏫 Школа</label>
-      <label class="chk"><input type="checkbox" data-act="cover" data-k="shops" ${c.shops ? 'checked' : ''}> 🏬 Магазины</label>`;
+      <div class="filters">${[['hospital', 'Больницы', bTile('hospital', 'sm')], ['police', 'Полиция', bTile('police', 'sm')], ['school', 'Школы', bTile('school', 'sm')], ['shops', 'Магазины', entTile('shop', null, 'sm')]]
+        .map(([k, n, i]) => `<label class="fchip ${c[k] ? 'on' : ''}"><input type="checkbox" data-act="cover" data-k="${k}" ${c[k] ? 'checked' : ''}>${i} ${n}</label>`).join('')}</div>`;
   }
 
   city_info(s) {
@@ -1268,14 +1269,14 @@ export class UI {
         <span>Застроено участков</span><span>${all.length} из ${plots}</span><span>Ваших зданий</span><span>${mine}</span>
         <span>Уровень города</span><span><span class="star sm">${s.city.level || 1}</span></span>
         <span>Полиция / больницы / школы</span><span>${count('police')} / ${count('hospital')} / ${count('school')}</span></div>
-      <p class="hint">Для каждого следующего уровня городу нужно по 2 полиции, больницы и школы. Уровень города увеличивает спрос жителей.</p>
-      <div><h3>Компании города</h3>${this.win_rating(s)}</div></div>`;
+      <div><p class="hint">Для каждого следующего уровня городу нужно по 2 полиции, больницы и школы. Уровень города увеличивает спрос жителей.</p>
+        <p class="hint">Место вашей компании в рейтинге: <b>${G.rating(s).findIndex(r => r.player) + 1}</b> — <a href="#" data-act="gopage" data-k="rating">рейтинг компаний</a>.</p></div></div>`;
   }
 
   city_projects(s) {
     const list = Object.values(s.buildings).filter(b => b.state === 'build');
     return list.length ? `<table class="grid"><tr><th>Объект</th><th>Заказчик</th><th>Подрядчик</th><th class="r">Готовность</th><th class="r">Осталось</th></tr>
-      ${list.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}">${bTitle(b)}</a> · ${b.floors} эт.</td><td style="color:${ownerColor(b)}">${ownerName(s, b)}</td>
+      ${list.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}" class="nm">${bHtml(b)}</a> · ${b.floors} эт.</td><td style="color:${ownerColor(b)}">${ownerName(s, b)}</td>
         <td>${contractorInfo(b.contractor).name}</td><td class="r">${pct(b.progress / b.buildDays)}</td><td class="r">~${Math.ceil(b.buildDays - b.progress)} дн.</td></tr>`).join('')}</table>`
       : '<p class="hint">Сейчас в городе ничего не строится.</p>';
   }
@@ -1283,7 +1284,7 @@ export class UI {
   city_ents(s) {
     const list = Object.values(s.buildings).filter(b => b.state === 'done');
     return list.length ? `<table class="grid"><tr><th>Здание</th><th>Владелец</th><th class="r">Этажей</th><th class="r">Заполненность</th><th>Район</th></tr>
-      ${list.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}">${bTitle(b)}</a></td><td style="color:${ownerColor(b)}">${ownerName(s, b)}</td>
+      ${list.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}" class="nm">${bHtml(b)}</a></td><td style="color:${ownerColor(b)}">${ownerName(s, b)}</td>
         <td class="r">${b.floors}</td><td class="r">${BUILDINGS[b.type].category === 'social' ? '—' : pct(G.occRate(b))}</td><td>${s.plots[G.key(b.i, b.j)].loc.toFixed(2)}</td></tr>`).join('')}</table>`
       : '<p class="hint">В городе пока нет готовых зданий.</p>';
   }
@@ -1298,32 +1299,30 @@ export class UI {
 
   page_builds(s) {
     const blds = Object.values(s.buildings).filter(b => G.isPlayer(b) && b.state === 'build');
-    return `<div class="page-title"><span class="big">🏗️</span><h1>Стройки</h1><div class="acts"><button class="btn primary" data-act="tocity">🌐 Выбрать участок в городе</button></div></div>
+    return `<div class="page-title"><span class="pt-ic">${ic('crane')}</span><h1>Стройки</h1><div class="acts"><button class="btn primary" data-act="tocity">${ic('pin')} Выбрать участок на карте</button></div></div>
       <div class="kv" style="max-width:480px"><span>Строек сейчас</span><span>${blds.length} / ${hqLimit(s, 'build')}</span>
       <span>Своих строительных компаний</span><span>${G.builders(s).length}</span></div>
-      ${blds.length ? `<table><tr><th>Здание</th><th>Строит</th><th class="r">Готовность</th><th class="r">Осталось</th><th>Статус</th></tr>
-      ${blds.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}">${bTitle(b)}</a> · ${b.floors} эт.</td><td>${contractorInfo(b.contractor).name}</td>
+      ${blds.length ? `<table class="grid"><tr><th>Здание</th><th>Строит</th><th class="r">Готовность</th><th class="r">Осталось</th><th>Статус</th></tr>
+      ${blds.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}" class="nm">${bHtml(b)}</a> · ${b.floors} эт.</td><td>${contractorInfo(b.contractor).name}</td>
         <td class="r">${pct(b.progress / b.buildDays)}</td><td class="r">~${Math.ceil(b.buildDays - b.progress)} дн.</td>
-        <td>${b.paused ? '<span class="warn">⛔ стоит</span>' : b.delayed ? 'простой' : 'идёт'}</td></tr>`).join('')}</table>`
+        <td>${b.paused ? '<span class="neg">стоит</span>' : b.delayed ? 'простой' : 'идёт'}</td></tr>`).join('')}</table>`
       : '<p class="hint">Строек нет. Откройте город, кликните по свободному участку и выберите, что и кто строит.</p>'}
-      <h3>Подрядчики</h3><table><tr><th>Компания</th><th class="r">Цена</th><th class="r">Срок</th><th>Качество</th><th></th></tr>
+      <h3>Подрядчики</h3><table class="grid"><tr><th>Компания</th><th class="r">Цена</th><th class="r">Срок</th><th>Качество</th><th></th></tr>
       ${Object.values(CONTRACTORS).map(c => `<tr><td><b style="color:${c.color}">${c.name}</b></td><td class="r">×${c.price}</td><td class="r">×${c.speed}</td><td class="stars">${stars(c.quality)}</td><td class="hint">${c.desc}</td></tr>`).join('')}
       <tr><td><b style="color:${OWN.color}">${OWN.name}</b></td><td class="r">материалы</td><td class="r">бригада</td><td class="stars">${stars(OWN.quality)}</td><td class="hint">${OWN.desc}</td></tr></table>`;
   }
 
   page_settings(s) {
     const st = this.app.settings;
-    return `<div class="page-title"><span class="big">⚙️</span><h1>Настройки</h1></div>
+    return `<div class="page-title"><span class="pt-ic">${ic('settings')}</span><h1>Настройки</h1></div>
       <div class="box" style="max-width:640px"><h4>Сервер</h4><div class="kv">
         <span>Длина игрового дня</span><span><b>${st.dayLengthSeconds} сек.</b></span>
         <span>Источник</span><span>${st.fromServer ? 'настройки сервера (settings.json)' : 'по умолчанию — файл настроек не найден'}</span></div>
         <p class="hint">Длина дня задаётся на сервере: в окне программы BizCity.exe или в файле <code>bizgame/settings.json</code>
         (<code>{"dayLengthSeconds": 60}</code>). Игра подхватывает изменения сама в течение 20 секунд.
-        Кнопки ⏩ внизу ускоряют время только у вас.</p></div>
-      <div class="box" style="max-width:640px"><h4>Компания и город</h4>
-        <div class="row"><button class="btn" data-act="rename">✎ Название компании</button><button class="btn" data-act="renamecity">✎ Название города</button></div></div>
+        Кнопки ускорения внизу экрана ускоряют время только у вас.</p></div>
       <div class="box" style="max-width:640px"><h4>Прогресс</h4><p class="hint">Сброс удалит сохранение и начнёт игру с пустого города.</p>
-        <button class="btn danger" data-act="reset">🔄 Сбросить прогресс</button></div>`;
+        <button class="btn danger" data-act="reset">${ic('refresh')} Сбросить прогресс</button></div>`;
   }
 
   page_market(s) { return this.titled('market'); }
@@ -1336,21 +1335,23 @@ export class UI {
 
   win_contracts(s) {
     if (!s.contracts.length) return '<p>Поставок пока нет. Откройте предприятие → вкладка «Поставки», чтобы возить сырьё на завод, стройматериалы в строительную компанию, а товары — в магазин.</p>';
-    return `<table><tr><th>Откуда</th><th>Куда</th><th>Товар</th><th class="r">В день</th><th></th></tr>
-      ${s.contracts.map(c => `<tr><td>${entName(s.enterprises[c.from])}</td><td>${entName(s.enterprises[c.to])}</td><td>${goodName(c.good)}</td>
-        <td class="r">${num(c.qty)}</td><td><button class="btn small" data-act="cdel" data-id="${c.id}">✕</button></td></tr>`).join('')}</table>`;
+    return `<table class="grid"><tr><th>Откуда</th><th>Куда</th><th>Товар</th><th class="r">В день</th><th></th></tr>
+      ${s.contracts.map(c => `<tr><td><a href="#" data-act="openent" data-id="${c.from}">${entHtml(s.enterprises[c.from])}</a></td><td><a href="#" data-act="openent" data-id="${c.to}">${entHtml(s.enterprises[c.to])}</a></td><td>${gn(c.good)}</td>
+        <td class="r">${num(c.qty)}</td><td><button class="btn small" data-act="cdel" data-id="${c.id}" title="Удалить">${ic('x')}</button></td></tr>`).join('')}</table>`;
   }
 
   win_market(s) {
-    const tabs = [['goods', 'Товары и склады'], ['estate', 'Недвижимость'], ['chains', 'Цепочки']];
+    // недвижимость — во вкладке «Аналитика» города
+    const tabs = [['goods', 'Товары и склады'], ['chains', 'Цепочки производства']];
+    if (this.page === 'market' && this.winTab === 'estate') this.winTab = 'goods';
     let h = `<div class="tabs">${tabs.map(([k, n]) => `<button data-act="wtab" data-tab="${k}" class="${this.winTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
     if (this.winTab === 'estate') {
       const done = Object.values(s.buildings).filter(b => b.state === 'done');
       h += `<div class="kv"><span>Население</span><span>${num(s.city.population || 0)}</span><span>Рабочих мест</span><span>${num(s.city.jobs || 0)}</span></div>
-        <table><tr><th>Помещения</th><th class="r">Спрос</th><th class="r">Всего в городе</th><th class="r">Занято</th><th class="r">Аренда в центре / на окраине</th></tr>`;
+        <table class="grid"><tr><th>Помещения</th><th class="r">Спрос</th><th class="r">Всего в городе</th><th class="r">Занято</th><th class="r">Аренда в центре / на окраине</th></tr>`;
       for (const t in UNITS) {
         const tot = done.reduce((a, b) => a + (b.units[t]?.total || 0), 0), occ = done.reduce((a, b) => a + (b.units[t]?.occ || 0), 0);
-        h += `<tr><td>${UNITS[t].icon} ${UNITS[t].name}</td><td class="r">${num(s.city.demand?.[t] || 0)}</td><td class="r">${num(tot)}</td><td class="r">${num(occ)}</td>
+        h += `<tr><td><span class="nm">${unitIc(t)}${UNITS[t].name}</span></td><td class="r">${num(s.city.demand?.[t] || 0)}</td><td class="r">${num(tot)}</td><td class="r">${num(occ)}</td>
           <td class="r">${Math.round(UNITS[t].rent * (0.6 + 0.4 * 1.7))} / ${Math.round(UNITS[t].rent * (0.6 + 0.4 * 0.6))} ₽</td></tr>`;
       }
       const mods = Object.entries(s.mods).map(([k, m]) => `${{ apt: 'жильё', office: 'офисы', comm: 'коммерция', build: 'стоимость стройки' }[k]} ×${m.mult} (${m.days} дн.)`);
@@ -1358,25 +1359,25 @@ export class UI {
         <p class="hint">Спрос на жильё растёт с каждым днём и с числом рабочих мест; спрос на офисы и коммерцию — с населением.</p>`;
     }
     if (this.winTab === 'chains') {
-      h += '<table><tr><th>Товар</th><th>Где</th><th>Из чего</th><th class="r">Мощн./день</th></tr>';
+      h += '<table class="grid"><tr><th>Товар</th><th>Где</th><th>Из чего</th><th class="r">Мощн./день</th></tr>';
       for (const r in RECIPES) {
         const R = RECIPES[r];
-        h += `<tr><td>${goodName(r)}</td><td>${producers(r).join(', ')}</td><td>${Object.entries(R.inputs).map(([g, k]) => `${k}×${GOODS[g].icon}`).join(' + ') || '—'}</td><td class="r">${R.rate}</td></tr>`;
+        h += `<tr><td>${gn(r)}</td><td>${producers(r).join(', ')}</td><td>${Object.entries(R.inputs).map(([g, k]) => `${k}×${GOODS[g].icon}`).join(' + ') || '—'}</td><td class="r">${R.rate}</td></tr>`;
       }
-      h += '</table><h3>Стройматериалы на один этаж</h3><table>';
-      for (const t in BUILDINGS) h += `<tr><td>${BUILDINGS[t].icon} ${BUILDINGS[t].name}</td><td>${Object.entries(BUILDINGS[t].materials).map(([g, n]) => `${n} ${GOODS[g].icon}`).join(' · ')}</td></tr>`;
+      h += '</table><h3>Стройматериалы на один этаж</h3><table class="grid">';
+      for (const t in BUILDINGS) h += `<tr><td><span class="nm">${bTile(t, 'sm')}${BUILDINGS[t].name}</span></td><td>${Object.entries(BUILDINGS[t].materials).map(([g, n]) => `${n} ${GOODS[g].icon}`).join(' · ')}</td></tr>`;
       return h + '</table>';
     }
     h += `<p class="hint">Универсальные склады города: запасы ограничены и пополняются медленно. Закупка — с наценкой ${Math.round((IMPORT_MARKUP - 1) * 100)}%,
       продажа — ${Math.round(WHOLESALE_RATE * 100)}% цены (с поправкой на качество, указано для качества 3). Ваши продажи пополняют склады.</p>`;
     const kinds = { raw: 'Сырьё', mid: 'Полуфабрикаты', build: 'Стройматериалы', retail: 'Потребительские товары' };
     for (const k in kinds) {
-      h += `<h3>${kinds[k]}</h3><table><tr><th>Товар</th><th class="r">На складах</th><th class="r">Цена</th><th class="r">Изм.</th><th class="r">Купить</th><th class="r">Продать</th></tr>`;
+      h += `<h3>${kinds[k]}</h3><table class="grid"><tr><th>Товар</th><th class="r">На складах</th><th class="r">Цена</th><th class="r">Изм.</th><th class="r">Купить</th><th class="r">Продать</th></tr>`;
       for (const g in GOODS) {
         if (GOODS[g].kind !== k) continue;
         const ch = (s.prices[g] / GOODS[g].price - 1) * 100;
         const low = s.depot[g] < P.depotStart(g) * 0.25;
-        h += `<tr><td>${goodName(g)}</td><td class="r ${low ? 'neg' : ''}">${num(s.depot[g])}</td><td class="r">${s.prices[g].toFixed(1)}</td>
+        h += `<tr><td>${gn(g)}</td><td class="r ${low ? 'neg' : ''}">${num(s.depot[g])}</td><td class="r">${s.prices[g].toFixed(1)}</td>
           <td class="r ${ch >= 0 ? 'pos' : 'neg'}">${ch >= 0 ? '+' : ''}${ch.toFixed(0)}%</td><td class="r">${P.buyPrice(s, g)}</td><td class="r">${P.sellPrice(s, g)}</td></tr>`;
       }
       h += '</table>';
@@ -1414,13 +1415,13 @@ export class UI {
   }
 
   win_rating(s) {
-    return `<table><tr><th>#</th><th>Компания</th><th class="r">Зданий</th><th class="r">Капитал</th></tr>
-      ${G.rating(s).map((r, n) => `<tr class="${r.player ? 'me' : ''}"><td>${n + 1}</td><td><span style="color:${r.color}">■</span> ${esc(r.name)}</td><td class="r">${r.count}</td><td class="r">${fmt(r.worth)}</td></tr>`).join('')}</table>
+    return `<table class="grid"><tr><th>#</th><th>Компания</th><th class="r">Зданий</th><th class="r">Капитал</th></tr>
+      ${G.rating(s).map((r, n) => `<tr class="${r.player ? 'me' : ''}"><td>${n + 1}</td><td><span class="dot" style="background:${r.color}"></span>${esc(r.name)}</td><td class="r">${r.count}</td><td class="r">${fmt(r.worth)}</td></tr>`).join('')}</table>
       <p class="hint">Конкуренты тоже заказывают стройки — город постепенно застраивается. Обгоните всех!</p>`;
   }
 
   win_quests(s) {
-    return G.QUESTS.map(q => `<div class="quest ${s.quests[q.id] ? 'done' : ''}"><span class="ic">${s.quests[q.id] ? '✅' : '⬜'}</span>
+    return G.QUESTS.map(q => `<div class="quest ${s.quests[q.id] ? 'done' : ''}"><span class="ic">${ic(s.quests[q.id] ? 'checkCircle' : 'circle')}</span>
       <span>${esc(q.text)}</span><span class="rw">+${fmt(q.reward)}</span></div>`).join('');
   }
 
@@ -1437,13 +1438,13 @@ export class UI {
   win_help() {
     return `<div class="help">
       <h3>Цель</h3><p>Застроить пустой город, построить производственную империю и обогнать конкурентов в рейтинге.</p>
-      <h3>Управление</h3><p>Разделы — иконки вверху: 🌐 город (3D-карта), 🏢 компания, 🏭 предприятия, 🧑‍💼 специалисты, 🏗️ стройки, 💲 финансы, 📋 отчёты. На карте: левая кнопка мыши — двигать, правая — вращать, колесо — масштаб; на телефоне — один палец двигает, два — масштаб и поворот. Пробел — пауза, ⏩ — ускорить время.</p><h3>Время</h3><p>Игровой день длится минуту (настраивается на сервере). До нового дня — в шапке. Каждый день начисляются аренда, зарплаты, идут стройки и производство.</p><h3>Опыт и уровень предприятия</h3><p>Каждое предприятие копит опыт за производство, продажи, поставки, исследования и стройку. Звезда — уровень предприятия (до 100), «+N» — свободные уровни. Новое подразделение или улучшение подразделения требует свободного уровня (и денег на оборудование).</p><h3>Квалификация и оборудование</h3><p>У подразделения есть оборудование качества 1–10: лучше оборудование — больше выпуск и выше качество, но оно требует квалификации персонала (качество × 1,2). Квалификация = городская + обучение (до +4). Не хватает квалификации — эффективность падает. Оборудование считается в штуках (линии, тракторы, краны…): нехватка снижает выпуск, кнопка «Докупить» дозаполнит. Износ растёт только в работе; ремонт бесплатный, но часть единиц списывается. Выключенный цех платит 25% зарплаты.</p><h3>Уровень компании</h3><p>Компания копит опыт: 35% опыта своих предприятий и доход от зданий. Уровень (до 100) открывает новые виды предприятий (список ближайших — в профиле компании), специалистов (с 5-го), авторегулирование снабжения (с 7-го, у предприятия от 8-го уровня). За новые уровни — денежный бонус.</p>
+      <h3>Управление</h3><p>Разделы — в меню вверху: город (3D-карта), компания, предприятия, специалисты, стройки, финансы, отчёты, рынок, поставки, рейтинг и задания. На карте: левая кнопка мыши — двигать, правая — вращать, колесо — масштаб; на телефоне — один палец двигает, два — масштаб и поворот. Пробел — пауза, кнопки внизу справа — ускорить время.</p><h3>Время</h3><p>Игровой день длится минуту (настраивается на сервере). До нового дня — в шапке. Каждый день начисляются аренда, зарплаты, идут стройки и производство.</p><h3>Опыт и уровень предприятия</h3><p>Каждое предприятие копит опыт за производство, продажи, поставки, исследования и стройку. Звезда — уровень предприятия (до 100), «+N» — свободные уровни. Новое подразделение или улучшение подразделения требует свободного уровня (и денег на оборудование).</p><h3>Квалификация и оборудование</h3><p>У подразделения есть оборудование качества 1–10: лучше оборудование — больше выпуск и выше качество, но оно требует квалификации персонала (качество × 1,2). Квалификация = городская + обучение (до +4). Не хватает квалификации — эффективность падает. Оборудование считается в штуках (линии, тракторы, краны…): нехватка снижает выпуск, кнопка «Докупить» дозаполнит. Износ растёт только в работе; ремонт бесплатный, но часть единиц списывается. Выключенный цех платит 25% зарплаты.</p><h3>Уровень компании</h3><p>Компания копит опыт: 35% опыта своих предприятий и доход от зданий. Уровень (до 100) открывает новые виды предприятий (список ближайших — в профиле компании), специалистов (с 5-го), авторегулирование снабжения (с 7-го, у предприятия от 8-го уровня). За новые уровни — денежный бонус.</p>
       <h3>Налоги</h3><p>Раз в неделю — налог 25% с прибыли каждого предприятия и здания отдельно; убытки прошлых недель уменьшают налог. Финансовый отдел штаб-квартиры ограничивает деньги на счёте: с излишка списывается штраф 10% в неделю. Шахтёрский отдел ограничивает число видов добычи.</p>
       <h3>Охват магазина</h3><p>Покупатели — жители и офисные работники в радиусе магазина (3 клетки, до 4,5 с известностью). Арендаторы того же профиля и ваши точки рядом — конкуренты. Ассортимент растёт с уровнем торгового отдела. На карте города включите флажок «Магазины», чтобы увидеть охват.</p>
       <h3>Реклама и цены</h3><p>Магазины, рестораны и салоны покупают рекламу (40–100%) — растёт известность и число покупателей. Кнопка «Рекомендованные цены» выставит цены с учётом качества. Дороже 2,5× средней цены по городу товар не покупают.</p><h3>Штаб-квартира и специалисты</h3><p>Отделы штаб-квартиры ограничивают число рабочих, предприятий, продуктов и строек — повышайте их уровень. Специалисты с биржи ускоряют предприятие своей профессии и повышают качество.</p>
       <h3>Здания в городе</h3><p>Кликните по пустому участку и закажите стройку. Три типа зданий:<br>
-      🏢 <b>офисные</b> — офисы сдаются компаниям;<br>🏘️ <b>жилые</b> — квартиры для горожан, на первом этаже — коммерческие помещения (магазины, кафе);<br>
-      🏥🚓🏫 <b>социальные</b> — больница, полиция и школа: город платит за содержание, а дома вокруг становятся привлекательнее. Уровень города (до 5) растёт с числом социальных зданий: каждые 2 полиции+больницы+школы дают +1 и повышают спрос.</p>
+      <b>офисные</b> — офисы сдаются компаниям;<br><b>жилые</b> — квартиры для горожан, на первом этаже — коммерческие помещения (магазины, кафе);<br>
+      <b>социальные</b> — больница, полиция и школа: город платит за содержание, а дома вокруг становятся привлекательнее. Уровень города (до 5) растёт с числом социальных зданий: каждые 2 полиции+больницы+школы дают +1 и повышают спрос.</p>
       <h3>Кто строит</h3><p>Строительная компания-подрядчик: дороже или дешевле, быстрее или медленнее, с разным качеством.
       Или <b>своими силами</b>: создайте «Строительную компанию» в меню «Предприятия», закупите стройматериалы на складах или производите их сами — тогда здание обойдётся намного дешевле.</p>
       <h3>Производство</h3><p>Фермы, карьеры, заводы, склады и НИИ — виртуальные предприятия, они не занимают места в городе. Настраивайте поставки между ними:

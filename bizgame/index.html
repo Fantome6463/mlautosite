@@ -11,35 +11,31 @@
 <body>
   <div id="app">
     <header id="hdr">
-      <div class="logo">
-        <b>БИЗ<span>$</span>ИТИ <i>3D</i></b>
-        <small>экономическая стратегия</small>
-        <small>до нового дня ~ <b id="dayLeft">—</b></small>
-      </div>
-      <div class="who">
-        <div>Компания: <b id="hdrCompany">—</b> · уровень <b id="compLvl">1</b> · <a href="#" data-page="settings">настройки</a></div>
-        <div>Деньги: <b id="money">—</b> · Капитал: <b id="worth">—</b> · Население: <b id="pop">—</b></div>
-        <div>Дата: <b id="date">—</b></div>
+      <div class="logo" title="БизСити 3D — экономическая стратегия"><span class="mark">Б</span><b>Биз<span>Сити</span></b><i>3D</i></div>
+      <div class="stats">
+        <div class="stat co" title="Компания и её уровень"><span class="star sm" id="compLvl">1</span><div><small>Компания</small><b id="hdrCompany">—</b></div></div>
+        <div class="stat" title="Деньги на счёте" data-ic="wallet"><div><small>Деньги</small><b id="money">—</b></div></div>
+        <div class="stat hide-s" title="Капитал компании" data-ic="coins"><div><small>Капитал</small><b id="worth">—</b></div></div>
+        <div class="stat hide-s" title="Население города" data-ic="people"><div><small>Население</small><b id="pop">—</b></div></div>
+        <div class="stat day" title="Игровая дата и время до нового дня" data-ic="clock"><div><small id="date">—</small><b><span class="daybar"><i id="dayBar"></i></span><span id="dayLeft">—</span></b></div></div>
       </div>
     </header>
 
     <nav id="toolbar">
-      <button data-page="city" title="Город (3D)"><i>🌐</i></button>
-      <span class="sep"></span>
-      <button data-page="company" data-tab="main" title="Компания"><i>🏢</i></button>
-      <button data-page="company" data-tab="ent" title="Предприятия"><i>🏭</i></button>
-      <button data-page="company" data-tab="staff" title="Специалисты"><i>🧑‍💼</i></button>
-      <button data-page="builds" title="Стройки"><i>🏗️</i></button>
-      <span class="sep"></span>
-      <button data-page="company" data-tab="finance" title="Финансы"><i>💲</i></button>
-      <button data-page="market" title="Рынок"><i>💹</i></button>
-      <button data-page="contracts" title="Поставки"><i>🚚</i></button>
-      <button data-page="rating" title="Рейтинг"><i>🏆</i></button>
-      <button data-page="quests" title="Задания"><i>📝</i><em id="questDot"></em></button>
-      <button data-page="company" data-tab="reports" title="Отчёты"><i>📋</i></button>
+      <button data-page="city" data-ic="globe"><span>Город</span></button>
+      <button data-page="company" data-tab="main" data-ic="briefcase"><span>Компания</span></button>
+      <button data-page="company" data-tab="ent" data-ic="factory"><span>Предприятия</span></button>
+      <button data-page="company" data-tab="staff" data-ic="users"><span>Специалисты</span></button>
+      <button data-page="builds" data-ic="crane"><span>Стройки</span></button>
+      <button data-page="company" data-tab="finance" data-ic="wallet"><span>Финансы</span></button>
+      <button data-page="company" data-tab="reports" data-ic="report"><span>Отчёты</span></button>
+      <button data-page="market" data-ic="trend"><span>Рынок</span></button>
+      <button data-page="contracts" data-ic="truck"><span>Поставки</span></button>
+      <button data-page="rating" data-ic="trophy"><span>Рейтинг</span></button>
+      <button data-page="quests" data-ic="tasks"><span>Задания</span><em id="questDot"></em></button>
       <span class="grow"></span>
-      <button data-page="help" title="Как играть"><i>❔</i></button>
-      <button data-page="settings" title="Настройки"><i>⚙️</i></button>
+      <button class="ico" data-page="help" data-ic="help" title="Как играть"></button>
+      <button class="ico" data-page="settings" data-ic="settings" title="Настройки"></button>
     </nav>
 
     <main id="main">
@@ -52,21 +48,16 @@
     </main>
 
     <footer id="bottombar">
-      <button data-page="city" title="Город"><i>🌐</i></button>
-      <button data-page="company" data-tab="main" title="Компания"><i>🏢</i></button>
-      <button data-page="company" data-tab="ent" title="Предприятия"><i>🏭</i></button>
-      <button data-page="builds" title="Стройки"><i>🏗️</i></button>
-      <button data-page="company" data-tab="reports" title="Новости и отчёты"><i>✉️</i></button>
-      <div id="news"></div>
+      <a href="#" id="newsWrap" data-page="company" data-tab="reports" data-rep="news" data-ic="bell" title="Все новости компании"><span id="news"></span></a>
       <div class="speed" id="speed">
-        <button data-speed="0" title="Пауза (пробел)">⏸</button>
-        <button data-speed="1" title="Обычная скорость">▶</button>
-        <button data-speed="2" title="Быстрее ×2">⏩</button>
-        <button data-speed="4" title="Быстрее ×4">⏭</button>
+        <button data-speed="0" data-ic="pause" title="Пауза (пробел)"></button>
+        <button data-speed="1" data-ic="play" title="Обычная скорость"></button>
+        <button data-speed="2" data-ic="ff" title="Быстрее ×2"></button>
+        <button data-speed="4" data-ic="fff" title="Быстрее ×4"></button>
       </div>
     </footer>
 
-    <div id="loading">Строим город…</div>
+    <div id="loading"><span class="mark">Б</span>Строим город…</div>
   </div>
   <script type="module" src="js/main.js"></script>
 </body>

@@ -93,7 +93,7 @@ function runDay() {
       world.floatText(b ? b.i : f.i, b ? b.j : f.j, (f.amount >= 0 ? '+' : '') + G.fmt(f.amount), f.amount < 0 ? 'neg' : '');
     } else if (f.type === 'built') {
       const b = s.buildings[f.id];
-      if (b && b.owner === 'player') { world.floatText(b.i, b.j, '🎉 Достроено!', 'info'); ui.toast(`🎉 ${BUILDINGS[b.type].name} №${b.id} достроен!`); }
+      if (b && b.owner === 'player') { world.floatText(b.i, b.j, 'Достроено!', 'info'); ui.toast(`🎉 ${BUILDINGS[b.type].name} №${b.id} достроен!`); }
     } else if (f.type === 'quest') ui.toast(`🏆 Задание выполнено! +${G.fmt(f.quest.reward)}`);
     else if (f.type === 'bankrupt') {
       setSpeed(0);
