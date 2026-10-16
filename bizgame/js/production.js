@@ -12,7 +12,11 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const round1 = v => Math.round(v * 10) / 10;
 const round2 = v => Math.round(v * 100) / 100;
 export const MAX_DIVS = 4;
-export const MAX_DIV_LEVEL = 5;
+export const MAX_DIV_LEVEL = 100;
+// Опыт и уровень предприятия: опыт идёт за производство, продажи, поставки, исследования и стройку.
+// Уровни подразделений расходуют уровни предприятия: новое подразделение или улучшение — только при свободном уровне.
+export const ENT_MAX_LEVEL = 100;
+export const xpNeed = lvl => Math.round(20000 * Math.pow(lvl, 1.6));
 
 // Названия подразделений по видам предприятий
 const DIV_NAMES = {
@@ -49,6 +53,18 @@ export const targetOf = e => e.divs.reduce((a, d) => a + d.target, 0);
 export const divMax = (e, d) => entDef(e).workers * d.level;
 export const maxWorkers = e => e.divs.reduce((a, d) => a + divMax(e, d), 0);
 export const levelOf = e => e.divs.reduce((a, d) => a + d.level, 0);
+export const freeLevels = e => Math.max(0, (e.lvl || 1) - levelOf(e));
+const NO_FREE = 'Нет свободного уровня: копите опыт предприятия — он идёт за производство и продажи';
+function gainXp(e, v, news) {
+  if (!(v > 0) || e.lvl >= ENT_MAX_LEVEL) return;
+  e.xp = (e.xp || 0) + v;
+  while (e.lvl < ENT_MAX_LEVEL && e.xp >= xpNeed(e.lvl)) {
+    e.xp -= xpNeed(e.lvl);
+    e.lvl++;
+    news(`⭐ «${e.name}» достиг ${e.lvl}-го уровня — появился свободный уровень для подразделений`);
+  }
+  if (e.lvl >= ENT_MAX_LEVEL) e.xp = 0;
+}
 export const capacity = e => (entDef(e).storage || 0) * Math.max(1, levelOf(e));
 export const wearOf = e => (e.divs.length ? e.divs.reduce((a, d) => a + d.wear, 0) / e.divs.length : 0);
 
@@ -142,7 +158,7 @@ export function createEnterprise(s, type, sub, opts = {}) {
   const e = {
     id: s.nextId++, type, sub: sub || null, name: opts.name?.trim() || `${def.name} №${count}`, invested: def.cost,
     salary: s.marketSalary, divs: [], stock: {}, buy: {}, autoSell: {}, prices: {}, autoSupply: { on: false, days: 3 },
-    research: null, progress: 0, built: s.day, host: host ? host.id : null, last: emptyLast(), hist: [], flh: [],
+    research: null, progress: 0, lvl: 1, xp: 0, built: s.day, host: host ? host.id : null, last: emptyLast(), hist: [], flh: [],
   };
   e.divs.push(newDiv(s, e, recipe));
   s.enterprises[e.id] = e;
@@ -152,6 +168,7 @@ export function createEnterprise(s, type, sub, opts = {}) {
 
 export function addDivision(s, e, recipe) {
   if (e.divs.length >= MAX_DIVS) return { error: `Не больше ${MAX_DIVS} подразделений` };
+  if (freeLevels(e) < 1) return { error: NO_FREE };
   const options = recipesFor(e.type, e.sub);
   if (options.length && !entDef(e).goods) {
     if (!options.includes(recipe)) recipe = options[0];
@@ -167,6 +184,7 @@ export function addDivision(s, e, recipe) {
 }
 export function upgradeDiv(s, e, d) {
   if (d.level >= MAX_DIV_LEVEL) return { error: 'Максимальный уровень' };
+  if (freeLevels(e) < 1) return { error: NO_FREE };
   const cost = divUpgradeCost(e, d);
   if (s.money < cost) return { error: `Нужно ${cost.toLocaleString('ru-RU')} ₽` };
   ledgerPay(s, -cost, 'equipment', { party: 'Универсальные склады', from: e.name, type: 'Расширение подразделения' });
@@ -425,7 +443,9 @@ export function productionTick(s, { spend, earn, fx, news }) {
     if (e.type !== 'lab' || !e.research) continue;
     const lvl = s.tech[e.research];
     if (lvl >= 10) continue;
-    e.progress += e.divs.reduce((a, d) => a + d.workers * d.level, 0) / 1.5 * salaryEff(s, e) * specBonus(s, e);
+    const pts = e.divs.reduce((a, d) => a + d.workers * d.level, 0) / 1.5 * salaryEff(s, e) * specBonus(s, e);
+    e.progress += pts;
+    e.xpExtra = (e.xpExtra || 0) + pts * 60;
     if (e.progress >= researchCost(lvl)) {
       e.progress -= researchCost(lvl);
       s.tech[e.research] = lvl + 1;
@@ -440,6 +460,17 @@ export function productionTick(s, { spend, earn, fx, news }) {
     if (e.hist.length > 60) e.hist.shift();
     e.flh.push(e.fl);
     if (e.flh.length > 14) e.flh.shift();
+  }
+  // опыт: стоимость произведённого, выручка, поставки своим (вполовину), исследования и стройка
+  for (const e of list) {
+    let v = e.xpExtra || 0;
+    for (const g in e.fl) {
+      const f = e.fl[g];
+      v += (f.made || 0) * s.prices[g] + (f.rev || 0) + (f.shipped || 0) * s.prices[g] * 0.5;
+    }
+    e.xpExtra = 0;
+    e.lastXp = Math.round(v);
+    gainXp(e, v, news);
   }
   specsTick(s, { spend, news });
   // склады города: подвоз извне и покупки остальных горожан; цена растёт при дефиците
@@ -548,9 +579,11 @@ export function migrateEnterprises(s) {
     if (e.research) e.research = GOODS[ren(e.research)] ? ren(e.research) : null;
     e.divs = [{ id: s.nextId++, recipe: recipe && canMake(e, recipe) ? recipe : null, level: e.level || 1, workers: e.workers || 0, target: e.target || 0, on: true, wear: 0 }];
     e.autoSupply ||= { on: false, days: 3 };
+    e.lvl = Math.max(1, levelOf(e)); e.xp = 0;
     e.hist ||= []; e.flh ||= [];
     delete e.recipe; delete e.level; delete e.workers; delete e.target;
   }
+  for (const e of Object.values(s.enterprises)) if (!e.lvl) { e.lvl = Math.max(1, levelOf(e)); e.xp = 0; }
   for (const c of s.contracts) c.good = ren(c.good);
   s.contracts = s.contracts.filter(c => GOODS[c.good]);
 }

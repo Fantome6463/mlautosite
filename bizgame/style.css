@@ -308,3 +308,8 @@ table.rep tr.total td { font-weight: 700; font-size: 14px; border-top: 2px solid
 .req { color: #4b5563; font-size: 11px; font-style: italic; margin-top: 6px; }
 .ccicons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; font-size: 20px; }
 @media (max-width: 900px) { .ccards { grid-template-columns: 1fr; } .divcard { grid-template-columns: 1fr; } .iso { transform: scale(.7) rotateX(55deg) rotateZ(-45deg); } }
+.star sup { font-size: 9px; color: #15803d; margin-left: 1px; }
+.xpwrap { font-size: 12px; color: #6b7280; display: inline-flex; align-items: center; gap: 6px; }
+.isotile.nofree { opacity: .6; }
+.lvlwrap { display: inline-flex; align-items: flex-start; vertical-align: middle; }
+.lvlwrap .free { font-size: 12px; color: #15803d; margin-left: -4px; }

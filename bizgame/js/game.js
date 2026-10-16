@@ -418,6 +418,7 @@ export function ownBuildStep(s, b, siteCount) {
     takeStock(e, g, use);
     flow(s, g, 'used', use);
     b.paid += Math.round(use * s.prices[g]);
+    e.xpExtra = (e.xpExtra || 0) + use * s.prices[g];
   }
   b.progress += step;
 }
