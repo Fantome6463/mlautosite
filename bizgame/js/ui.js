@@ -2,12 +2,12 @@
 import {
   GOODS, RECIPES, ENTERPRISES, BUILDINGS, UNITS, CATEGORIES, CONTRACTORS, OWN, contractorInfo, RIVALS,
   NPC_QUALITY, IMPORT_MARKUP, WHOLESALE_RATE, SHOP_UNITS_PER_WORKER, TRANSPORT_PER_UNIT, ADVANCE,
-  HQ, HQ_MAX, hqLimit, hqUpgradeCost, specSalary,
+  HQ, HQ_MAX, hqLimit, hqUpgradeCost, specSalary, companyXpNeed, FEATURES, AUTO_SUPPLY_ENT_LEVEL,
 } from './data.js';
 import * as G from './game.js';
 import * as P from './production.js';
 import { CATS } from './ledger.js';
-import { entDef, defOf, recipesFor, sellsList, accepts, producers, GROUPS } from './catalog.js';
+import { entDef, defOf, recipesFor, sellsList, accepts, producers, GROUPS, UNLOCKS } from './catalog.js';
 
 const $ = s => document.querySelector(s);
 const esc = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -53,6 +53,13 @@ function goodGroups() {
   for (const g in GOODS) (out[GROUPS[GOODS[g].group]] ||= []).push(g);
   return out;
 }
+// Что откроется на ближайших уровнях компании
+function nextUnlocks(s) {
+  const L = G.companyLevel(s), list = [];
+  for (const [k, l] of Object.entries(UNLOCKS)) if (l > L && l <= L + 3) { const [t, sb] = k.split(':'); list.push([l, defOf(t, sb)]); }
+  list.sort((a, b) => a[0] - b[0]);
+  return list.length ? `<div class="hint" style="margin-top:6px">Скоро: ${list.slice(0, 4).map(([l, d]) => `${d.icon} ${d.name} (${l})`).join(', ')}</div>` : '';
+}
 function gameDate(day) {
   const d = new Date(Date.UTC(2001, 0, day));
   return `${WEEK[d.getUTCDay()]}, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear() - 2000}-го года`;
@@ -95,6 +102,7 @@ export class UI {
   renderTop(msLeft, speed) {
     const s = this.s;
     $('#money').textContent = fmtShort(s.money);
+    $('#compLvl').textContent = G.companyLevel(s);
     $('#worth').textContent = fmtShort(G.netWorth(s));
     $('#pop').textContent = num(s.city.population || 0);
     $('#hdrCompany').textContent = s.company;
@@ -443,8 +451,9 @@ export class UI {
       <tr><td colspan="8" class="r"><b>Итого, сумма закупки в день:</b></td><td class="r"><b>${fmt(total)}</b></td><td></td></tr></table>
       <div class="row"><select id="buyGood">${can.map(g => `<option value="${g}">${goodName(g)} — ${P.buyPrice(s, g)} ₽, на складах ${num(s.depot[g])}</option>`).join('')}</select>
         <input type="number" id="buyQty" min="1" value="100"><button class="btn small primary" data-act="buyadd">Добавить закупку</button></div>
-      ${Object.keys(need).length ? `<label class="row"><input type="checkbox" data-act="autosupply" ${e.autoSupply?.on ? 'checked' : ''}> Авторегулирование снабжения — держать сырьё на
-        <input type="range" min="1" max="14" value="${e.autoSupply?.days || 3}" data-act="autodays" style="max-width:140px"> <b>${e.autoSupply?.days || 3} дн.</b></label>` : ''}
+      ${Object.keys(need).length ? (P.canAutoSupply(s, e) ? `<label class="row"><input type="checkbox" data-act="autosupply" ${e.autoSupply?.on ? 'checked' : ''}> Авторегулирование снабжения — запас на
+        <input type="range" min="1" max="5" value="${e.autoSupply?.weeks || 1}" data-act="autodays" style="max-width:140px"> <b>${e.autoSupply?.weeks || 1} нед.</b></label>`
+        : `<p class="hint">🔒 Авторегулирование снабжения — с ${FEATURES.autoSupply}-го уровня компании для предприятий ${AUTO_SUPPLY_ENT_LEVEL}-го уровня и выше.</p>`) : ''}
       <p class="hint">Закупки — с универсальных складов города (запасы ограничены). Поставки от своих предприятий настраиваются на вкладке «Сбыт» у поставщика.</p>
       ${incoming.length ? `<h3>Входящие поставки</h3>${this.contractRows(incoming, 'from')}` : ''}`;
   }
@@ -458,7 +467,7 @@ export class UI {
 
   ep_sales(e, s) {
     const d = entDef(e), fl = P.entFlow(e), sellers = d.sells ? sellsList(e.type, e.sub) : [];
-    const goods = [...new Set([...e.divs.map(x => x.recipe).filter(Boolean), ...Object.keys(e.stock), ...sellers.filter(g => fl[g])])].filter(g => GOODS[g]);
+    const goods = [...new Set([...e.divs.map(x => x.recipe).filter(Boolean), ...Object.keys(e.stock), ...(d.goods ? sellers : sellers.filter(g => fl[g]))])].filter(g => GOODS[g]);
     const outgoing = s.contracts.filter(c => c.from === e.id);
     const others = Object.values(s.enterprises).filter(x => x.id !== e.id);
     const totRev = goods.reduce((a, g) => a + (fl[g]?.rev || 0), 0);
@@ -466,7 +475,8 @@ export class UI {
         <th class="r">На складе</th><th class="r">Кач-во</th><th class="r">Себест.</th><th>${d.sells ? 'Цена' : 'Опт / автопродажа'}</th></tr>
       ${goods.map(g => {
         const st = e.stock[g], f = fl[g] || {};
-        const priceCell = d.sells && sellers.includes(g)
+        const locked = d.goods && sellers.includes(g) && !P.availableGoods(e).includes(g);
+        const priceCell = locked ? `<span class="hint">🔒 с ${P.goodUnlockLevel(e, g)}-го уровня отдела</span>` : d.sells && sellers.includes(g)
           ? `<input type="number" min="1" value="${e.prices[g] ?? GOODS[g].price}" data-act="price" data-good="${g}" style="width:80px"> <span class="hint">рынок ${Math.round(s.prices[g])}</span>
             ${(e.prices[g] ?? GOODS[g].price) > s.prices[g] * P.PRICE_CAP ? '<span class="neg" title="Слишком дорого — не покупают">⛔</span>' : ''}`
           : P.inDepot(g) ? `${P.sellPrice(s, g, st?.q)} ₽ <label><input type="checkbox" data-act="autosell" data-good="${g}" ${e.autoSell[g] ? 'checked' : ''}> авто</label>
@@ -477,7 +487,8 @@ export class UI {
       <tr><td><b>Итого (7 дн.):</b></td><td></td><td class="r"><b>${fmt(totRev)}</b></td><td colspan="6"></td></tr></table>`;
     if (d.sells) h = `<div class="box"><h4>Реклама и известность</h4>
         <div class="row"><label>Известность</label><span class="effbar wide"><i style="width:${Math.round((e.aware ?? 0.2) * 100)}%"></i></span> <b>${pct(e.aware ?? 0.2)}</b>
-          <span class="hint">покупателей ×${P.crowdFactor(e).toFixed(2)}</span></div>
+          <span class="hint">радиус охвата ${P.shopRadius(e).toFixed(1)} кл.</span></div>
+        ${e.area ? `<div class="kv"><span>Жителей и прохожих в охвате</span><span>${num(e.area.pop)}</span><span>Конкурентов того же профиля</span><span>${e.area.comp}</span></div>` : ''}
         <div class="row"><label>Бюджет</label>${P.AD_LEVELS.map(v => `<button class="chip ${(e.ad || 0) === v ? 'on' : ''}" data-act="adset" data-v="${v}">${v ? v + '% · ' + fmtShort(P.adCost(e, v)) + '/день' : 'без рекламы'}</button>`).join('')}</div>
         <p class="hint">Реклама поднимает известность до выбранного уровня, без рекламы известность понемногу падает.</p></div>
       <div class="actions"><button class="btn" data-act="recprice">💡 Рекомендованные цены</button><span class="hint">с учётом качества; дороже ${P.PRICE_CAP}× средней цены по городу товар не покупают</span></div>` + h
@@ -508,14 +519,18 @@ export class UI {
               <span>Квалиф. персонала</span><span class="${P.qualOf(s, x) < P.reqQual(x) ? 'neg' : ''}">${P.qualOf(s, x).toFixed(2)}${P.qualOf(s, x) < P.reqQual(x) ? ' ⚠️' : ''}</span>
               <span>Треб. квалификация</span><span>${P.reqQual(x).toFixed(2)}</span></div>
             <label class="row"><input type="checkbox" data-act="trainon" data-d="${x.id}" ${x.trainOn ? 'checked' : ''}> Обучение
-              <span class="effbar"><i style="width:${Math.round(((x.train || 0) / P.TRAIN_MAX) * 100)}%"></i></span> <span class="hint">+${(x.train || 0).toFixed(1)} · ${fmt(P.trainCost(x))}/день</span></label>
+              <span class="effbar"><i style="width:${Math.round(((x.train || 0) / P.TRAIN_MAX) * 100)}%"></i></span> <span class="hint">+${(x.train || 0).toFixed(2)} из ${P.TRAIN_MAX}${(x.train || 0) < P.TRAIN_MAX ? ' · ' + fmt(P.trainCost(e, x)) + '/день' : ' · максимум'}</span></label>
             <div class="row"><label>Оборудование</label>качество <b>${x.eq || 3}</b>
               <select id="eq${x.id}">${Array.from({ length: 10 }, (_, n) => n + 1).map(q => `<option value="${q}" ${q === (x.eq || 3) ? 'selected' : ''}>${q} — ${fmtShort(P.equipCost(e, x, q))}</option>`).join('')}</select>
               <button class="btn small" data-act="eqset" data-d="${x.id}">Заменить</button></div></div>
           <div><div class="row"><label>Загрузка</label><span class="effbar wide pink"><i style="width:${Math.round((x.workers / max) * 100)}%"></i></span></div>
             <div class="row"><label>Эффективность</label><span class="effbar wide"><i style="width:${Math.round(Math.min(1, (x.workers / max) * P.salaryEff(s, e) * P.wearFactor(x)) * 100)}%"></i></span></div>
             <div class="row"><label>Износ</label><span class="effbar wide red"><i style="width:${Math.round(x.wear * 100)}%"></i></span>
-              ${x.wear > 0.05 ? `<button class="btn small" data-act="repair" data-d="${x.id}">🔧 ${fmtShort(P.repairCost(e, x))}</button>` : ''}</div></div>
+              ${x.wear > 0.05 ? `<button class="btn small" data-act="repair" data-d="${x.id}" title="Бесплатно: из изношенного соберут меньше целого">🔧 ремонт (−${P.repairLoss(x)} шт.)</button>` : ''}</div>
+            ${P.equipOf(e) ? `<div class="row"><label>${P.equipOf(e).icon} ${P.equipOf(e).name}</label><b class="${(x.eqN || 0) < P.eqNeed(e, x) ? 'neg' : ''}">${x.eqN || 0} / ${P.eqNeed(e, x)} шт.</b>
+              ${(x.eqN || 0) < P.eqNeed(e, x) ? `<button class="btn small" data-act="eqfill" data-d="${x.id}">Докупить ${P.eqNeed(e, x) - (x.eqN || 0)} шт. — ${fmtShort((P.eqNeed(e, x) - (x.eqN || 0)) * P.unitPrice(e, x.eq || 3))}</button>` : ''}
+              <span class="hint">1 шт. на ${P.equipOf(e).per} раб., служит ${P.equipOf(e).life} г.</span></div>` : '<p class="hint">Оборудование не требуется.</p>'}
+            ${!x.on && x.workers ? '<p class="warn">Подразделение остановлено: рабочие получают 25% зарплаты.</p>' : ''}</div>
           <div class="dprod">${x.recipe ? `<span class="big3">${GOODS[x.recipe].icon}</span>` : ''}${n === 0 ? `<div class="boss">${sp ? `<span class="face">${sp.face}</span><br>${esc(sp.name)}<br><span class="star sm">${sp.level}</span>` : '<span class="hint">без начальника</span>'}</div>` : ''}</div></div>`;
       }).join('')}
       <div class="actions"><button class="btn primary" data-act="adddiv" ${e.divs.length >= P.MAX_DIVS || P.freeLevels(e) < 1 ? 'disabled' : ''}>➕ Новое подразделение (${fmt(P.divCost(e))})</button>
@@ -616,7 +631,7 @@ export class UI {
         <span>Склад</span><span>${num(D.storage || 0)} ед.</span><span>Содержание</span><span>${fmt(D.upkeep)}/день</span></div>
         <div class="row"><label>Название</label><input type="text" id="crName" maxlength="40" value="${esc(D.name)}" style="flex:1;max-width:320px"></div>
         ${options.length && !D.goods ? `<div class="row"><label>Первый продукт</label><select id="crRecipe">${options.map(g => `<option value="${g}">${goodName(g)}${RECIPES[g].inputs && Object.keys(RECIPES[g].inputs).length ? ' ← ' + Object.keys(RECIPES[g].inputs).map(x => GOODS[x].icon).join('') : ''}</option>`).join('')}</select></div>` : ''}
-        ${D.sells ? (hosts.length ? `<div class="row"><label>Помещение</label><select id="crHost">${hosts.map(b => `<option value="${b.id}" ${b.id === cr.hostId ? 'selected' : ''}>Дом №${b.id} (участок ${b.i}:${b.j}, район ${s.plots[G.key(b.i, b.j)].loc.toFixed(2)}) — ${b.owner === 'player' ? 'ваш, без аренды' : 'аренда ' + b.units.comm.rent + ' ₽/день'}</option>`).join('')}</select></div>`
+        ${D.sells ? (hosts.length ? `<div class="row"><label>Помещение</label><select id="crHost">${hosts.map(b => { const a = P.catchment(s, b, 3, cr.type === 'shop' ? 'shop:' + cr.sub : cr.type); return `<option value="${b.id}" ${b.id === cr.hostId ? 'selected' : ''}>Дом №${b.id} (${b.i}:${b.j}) — покупателей ~${a.pop}, конкурентов ${a.comp}, ${b.owner === 'player' ? 'ваш, без аренды' : 'аренда ' + b.units.comm.rent + ' ₽/день'}</option>`; }).join('')}</select></div>`
           : '<p class="warn">Нужно коммерческое помещение на первом этаже жилого дома. Постройте жилой дом или дождитесь, пока конкуренты построят.</p>') : ''}
         ${err ? `<p class="warn">${err}</p>` : ''}
         <div class="actions"><button class="btn" data-act="crback">⏪ Назад</button><button class="btn primary" data-act="crcreate" ${err ? 'disabled' : ''}>Создать предприятие</button></div></div></div>`;
@@ -678,6 +693,7 @@ export class UI {
       }
       case 'updiv': run(() => P.upgradeDiv(s, e, e.divs.find(x => x.id === +t.dataset.d))); this.renderPage(); break;
       case 'rmdiv': if (confirm('Продать подразделение? Вернётся 30% стоимости оборудования.')) { run(() => P.removeDiv(s, e, e.divs.find(x => x.id === +t.dataset.d))); this.renderPage(); } break;
+      case 'eqfill': run(() => P.fillEquipment(s, e, e.divs.find(x => x.id === +t.dataset.d))); this.renderPage(); break;
       case 'eqset': { const d = e.divs.find(x => x.id === +t.dataset.d); run(() => P.replaceEquipment(s, e, d, +$('#eq' + d.id).value)); this.renderPage(); break; }
       case 'adset': this.app.act(() => { e.ad = +t.dataset.v; }); this.renderPage(); break;
       case 'recprice':
@@ -751,7 +767,7 @@ export class UI {
         case 'divon': e.divs.find(x => x.id === +t.dataset.d).on = t.checked; break;
         case 'divtarget': e.divs.find(x => x.id === +t.dataset.d).target = +t.value; break;
         case 'autosupply': e.autoSupply = { ...(e.autoSupply || { days: 3 }), on: t.checked }; break;
-        case 'autodays': e.autoSupply = { ...(e.autoSupply || {}), days: +t.value }; break;
+        case 'autodays': e.autoSupply = { ...(e.autoSupply || {}), weeks: +t.value }; break;
         case 'assign': { const r = P.assignSpec(this.s, +t.dataset.id, +t.value || null); if (r.error) this.toast(r.error, true); break; }
         case 'cover': this.app.world.setCoverage(t.dataset.k, t.checked, this.s); break;
         case 'esalary': { const x = this.s.enterprises[t.dataset.id]; x.salary = Math.max(1, Math.round(+t.value || 1)); break; }
@@ -838,7 +854,7 @@ export class UI {
     return { days: h.length, sum };
   }
 
-  companyLevel() { return Math.max(1, Math.floor(Math.log2(Math.max(1, G.netWorth(this.s)) / 125000)) + 1); }
+  companyLevel() { return G.companyLevel(this.s); }
   efficiency() {
     const s = this.s, ents = Object.values(s.enterprises), blds = Object.values(s.buildings).filter(b => G.isPlayer(b) && b.state === 'done' && Object.keys(b.units).length);
     const vals = [...ents.map(e => Math.min(1, (P.workersOf(e) / Math.max(1, P.targetOf(e) || 1)) * P.salaryEff(s, e))), ...blds.map(G.occRate)];
@@ -859,8 +875,8 @@ export class UI {
         <span class="n">${e.lvl || 1}${P.freeLevels(e) ? '+' + P.freeLevels(e) : ''}</span>${this.entProblem(e) ? '<span class="w">⚠️</span>' : ''}</button>`),
     ].join('');
     const hq = Object.keys(HQ).map(k => {
-      const l = s.hq[k], used = { staff: P.staffTotal(s), manage: ents.length, prod: P.products(s).size, build: blds.filter(b => b.state === 'build').length }[k];
-      return `<div class="dept"><span class="star">${l}</span><div><div class="nm">${HQ[k].name}</div><div class="lim">${HQ[k].label}: ${num(used)} / ${num(hqLimit(s, k))}</div></div>
+      const l = s.hq[k] || 1, used = { staff: P.staffTotal(s), manage: ents.length, prod: P.products(s).size, build: blds.filter(b => b.state === 'build').length, finance: s.money, mining: P.minedTypes(s).size }[k];
+      return `<div class="dept"><span class="star">${l}</span><div><div class="nm">${HQ[k].name}</div><div class="lim ${HQ[k].money && used > hqLimit(s, k) ? 'neg' : ''}">${HQ[k].label}: ${HQ[k].money ? fmtShort(used) + ' / ' + fmtShort(hqLimit(s, k)) : num(used) + ' / ' + num(hqLimit(s, k))}</div></div>
         ${l < HQ_MAX ? `<button class="btn small" data-act="hq" data-k="${k}" ${s.money < hqUpgradeCost(l) ? 'disabled' : ''} title="Повысить уровень">⬆ ${fmtShort(hqUpgradeCost(l))}</button>` : ''}</div>`;
     }).join('');
     return `<div class="co-grid">
@@ -884,6 +900,8 @@ export class UI {
         <div class="ava">🧑‍💼</div>${esc(s.company)}
         <div style="margin-top:6px">Эффективность: <span class="eff"><i style="width:${Math.round(eff * 100)}%"></i></span> ${pct(eff)}</div>
         <div style="margin-top:6px"><span class="star" title="Уровень компании">${this.companyLevel()}</span></div>
+        <div class="xpwrap" title="Опыт компании: ${num(s.compXp || 0)} из ${num(companyXpNeed(s.compLvl || 1))}">Опыт: <span class="effbar"><i style="width:${Math.round(((s.compXp || 0) / companyXpNeed(s.compLvl || 1)) * 100)}%"></i></span></div>
+        ${nextUnlocks(s)}
       </div>
 
       <div class="hq"><h2>Штаб-квартира</h2>${hq}
@@ -968,7 +986,8 @@ export class UI {
       <table class="grid"><tr><th>Кандидат</th><th>Уровень</th><th>Профессия</th><th class="r">Зарплата</th><th class="r">Подбор</th><th></th></tr>
       ${(s.candidates || []).map(c => `<tr><td><span class="face">${c.face}</span> ${esc(c.name)}</td><td><span class="star sm">${c.level}</span></td><td>${c.prof} <span class="hint">(${ENTERPRISES[c.type].name})</span></td>
         <td class="r">${fmt(specSalary(c.level))}/день</td><td class="r">${fmt(P.hireFee(c))}</td>
-        <td><button class="btn small primary" data-act="hire" data-id="${c.id}" ${s.money < P.hireFee(c) ? 'disabled' : ''}>Нанять</button></td></tr>`).join('')}</table>
+        <td><button class="btn small primary" data-act="hire" data-id="${c.id}" ${s.money < P.hireFee(c) || G.companyLevel(s) < FEATURES.specialists ? 'disabled' : ''}>Нанять</button></td></tr>`).join('')}</table>
+      ${G.companyLevel(s) < FEATURES.specialists ? `<p class="warn">🔒 Нанимать специалистов можно с ${FEATURES.specialists}-го уровня компании.</p>` : ''}
       <p class="hint">Специалист работает на одном предприятии своей профессии: +3% производительности и +0,08 к качеству за уровень. Опыт растёт каждый день работы.</p>`;
     if (ents.length) {
       h += `<h3>Рабочие <small class="hint">${num(P.staffTotal(s))} / ${num(hqLimit(s, 'staff'))} · средняя зарплата в городе ${s.marketSalary} ₽</small></h3>
@@ -1233,7 +1252,9 @@ export class UI {
       <p class="hint">Клик по участку — информация и стройка. Мышь: левая кнопка — двигать, правая — вращать, колесо — масштаб.
         Круги показывают зоны охвата: зелёные — ваши здания, красные — конкурентов.</p>
       <label class="chk"><input type="checkbox" data-act="cover" data-k="hospital" ${c.hospital ? 'checked' : ''}> 🏥 Больница</label>
-      <label class="chk"><input type="checkbox" data-act="cover" data-k="police" ${c.police ? 'checked' : ''}> 🚓 Полиция</label>`;
+      <label class="chk"><input type="checkbox" data-act="cover" data-k="police" ${c.police ? 'checked' : ''}> 🚓 Полиция</label>
+      <label class="chk"><input type="checkbox" data-act="cover" data-k="school" ${c.school ? 'checked' : ''}> 🏫 Школа</label>
+      <label class="chk"><input type="checkbox" data-act="cover" data-k="shops" ${c.shops ? 'checked' : ''}> 🏬 Магазины</label>`;
   }
 
   city_info(s) {
@@ -1245,7 +1266,9 @@ export class UI {
         <span>Население</span><span>${num(s.city.population || 0)} чел.</span><span>Семей в квартирах</span><span>${num(s.city.households || 0)}</span>
         <span>Рабочих мест</span><span>${num(s.city.jobs || 0)}</span><span>Средняя зарплата</span><span>${s.marketSalary} ₽/день</span>
         <span>Застроено участков</span><span>${all.length} из ${plots}</span><span>Ваших зданий</span><span>${mine}</span>
-        <span>Больниц / полиции</span><span>${count('hospital')} / ${count('police')}</span></div>
+        <span>Уровень города</span><span><span class="star sm">${s.city.level || 1}</span></span>
+        <span>Полиция / больницы / школы</span><span>${count('police')} / ${count('hospital')} / ${count('school')}</span></div>
+      <p class="hint">Для каждого следующего уровня городу нужно по 2 полиции, больницы и школы. Уровень города увеличивает спрос жителей.</p>
       <div><h3>Компании города</h3>${this.win_rating(s)}</div></div>`;
   }
 
@@ -1414,11 +1437,13 @@ export class UI {
   win_help() {
     return `<div class="help">
       <h3>Цель</h3><p>Застроить пустой город, построить производственную империю и обогнать конкурентов в рейтинге.</p>
-      <h3>Управление</h3><p>Разделы — иконки вверху: 🌐 город (3D-карта), 🏢 компания, 🏭 предприятия, 🧑‍💼 специалисты, 🏗️ стройки, 💲 финансы, 📋 отчёты. На карте: левая кнопка мыши — двигать, правая — вращать, колесо — масштаб; на телефоне — один палец двигает, два — масштаб и поворот. Пробел — пауза, ⏩ — ускорить время.</p><h3>Время</h3><p>Игровой день длится минуту (настраивается на сервере). До нового дня — в шапке. Каждый день начисляются аренда, зарплаты, идут стройки и производство.</p><h3>Опыт и уровень предприятия</h3><p>Каждое предприятие копит опыт за производство, продажи, поставки, исследования и стройку. Звезда — уровень предприятия (до 100), «+N» — свободные уровни. Новое подразделение или улучшение подразделения требует свободного уровня (и денег на оборудование).</p><h3>Квалификация и оборудование</h3><p>У подразделения есть оборудование качества 1–10: лучше оборудование — больше выпуск и выше качество, но оно требует квалификации персонала (качество × 1,2). Квалификация = городская + обучение (до +4). Не хватает квалификации — эффективность падает.</p>
+      <h3>Управление</h3><p>Разделы — иконки вверху: 🌐 город (3D-карта), 🏢 компания, 🏭 предприятия, 🧑‍💼 специалисты, 🏗️ стройки, 💲 финансы, 📋 отчёты. На карте: левая кнопка мыши — двигать, правая — вращать, колесо — масштаб; на телефоне — один палец двигает, два — масштаб и поворот. Пробел — пауза, ⏩ — ускорить время.</p><h3>Время</h3><p>Игровой день длится минуту (настраивается на сервере). До нового дня — в шапке. Каждый день начисляются аренда, зарплаты, идут стройки и производство.</p><h3>Опыт и уровень предприятия</h3><p>Каждое предприятие копит опыт за производство, продажи, поставки, исследования и стройку. Звезда — уровень предприятия (до 100), «+N» — свободные уровни. Новое подразделение или улучшение подразделения требует свободного уровня (и денег на оборудование).</p><h3>Квалификация и оборудование</h3><p>У подразделения есть оборудование качества 1–10: лучше оборудование — больше выпуск и выше качество, но оно требует квалификации персонала (качество × 1,2). Квалификация = городская + обучение (до +4). Не хватает квалификации — эффективность падает. Оборудование считается в штуках (линии, тракторы, краны…): нехватка снижает выпуск, кнопка «Докупить» дозаполнит. Износ растёт только в работе; ремонт бесплатный, но часть единиц списывается. Выключенный цех платит 25% зарплаты.</p><h3>Уровень компании</h3><p>Компания копит опыт: 35% опыта своих предприятий и доход от зданий. Уровень (до 100) открывает новые виды предприятий (список ближайших — в профиле компании), специалистов (с 5-го), авторегулирование снабжения (с 7-го, у предприятия от 8-го уровня). За новые уровни — денежный бонус.</p>
+      <h3>Налоги</h3><p>Раз в неделю — налог 25% с прибыли каждого предприятия и здания отдельно; убытки прошлых недель уменьшают налог. Финансовый отдел штаб-квартиры ограничивает деньги на счёте: с излишка списывается штраф 10% в неделю. Шахтёрский отдел ограничивает число видов добычи.</p>
+      <h3>Охват магазина</h3><p>Покупатели — жители и офисные работники в радиусе магазина (3 клетки, до 4,5 с известностью). Арендаторы того же профиля и ваши точки рядом — конкуренты. Ассортимент растёт с уровнем торгового отдела. На карте города включите флажок «Магазины», чтобы увидеть охват.</p>
       <h3>Реклама и цены</h3><p>Магазины, рестораны и салоны покупают рекламу (40–100%) — растёт известность и число покупателей. Кнопка «Рекомендованные цены» выставит цены с учётом качества. Дороже 2,5× средней цены по городу товар не покупают.</p><h3>Штаб-квартира и специалисты</h3><p>Отделы штаб-квартиры ограничивают число рабочих, предприятий, продуктов и строек — повышайте их уровень. Специалисты с биржи ускоряют предприятие своей профессии и повышают качество.</p>
       <h3>Здания в городе</h3><p>Кликните по пустому участку и закажите стройку. Три типа зданий:<br>
       🏢 <b>офисные</b> — офисы сдаются компаниям;<br>🏘️ <b>жилые</b> — квартиры для горожан, на первом этаже — коммерческие помещения (магазины, кафе);<br>
-      🏥🚓 <b>социальные</b> — больница и полиция: город платит за содержание, а дома вокруг становятся привлекательнее.</p>
+      🏥🚓🏫 <b>социальные</b> — больница, полиция и школа: город платит за содержание, а дома вокруг становятся привлекательнее. Уровень города (до 5) растёт с числом социальных зданий: каждые 2 полиции+больницы+школы дают +1 и повышают спрос.</p>
       <h3>Кто строит</h3><p>Строительная компания-подрядчик: дороже или дешевле, быстрее или медленнее, с разным качеством.
       Или <b>своими силами</b>: создайте «Строительную компанию» в меню «Предприятия», закупите стройматериалы на складах или производите их сами — тогда здание обойдётся намного дешевле.</p>
       <h3>Производство</h3><p>Фермы, карьеры, заводы, склады и НИИ — виртуальные предприятия, они не занимают места в городе. Настраивайте поставки между ними:

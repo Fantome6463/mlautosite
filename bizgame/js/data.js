@@ -61,7 +61,44 @@ export const BUILDINGS = {
     upkeep: 1500, subsidy: 1700, radius: 4, service: 'safety',
     materials: { concrete: 200, bricks: 160, steel: 40, glass: 50 },
   },
+  school: {
+    category: 'social', name: 'Школа', icon: '🏫', floors: [3],
+    cost: () => 120000, days: () => 18, units: () => ({}),
+    upkeep: 2000, subsidy: 2300, radius: 4, service: 'edu',
+    materials: { concrete: 220, bricks: 200, steel: 30, glass: 70 },
+  },
 };
+
+// Уровень города: на каждый следующий уровень нужно по 2 полиции, поликлиники (больницы) и школы (вики «Уровни городов»)
+export const CITY_MAX_LEVEL = 5;
+export const cityLevelOf = counts => Math.min(CITY_MAX_LEVEL, 1 + Math.floor(Math.min(counts.police || 0, counts.hospital || 0, counts.school || 0) / 2));
+
+// Оборудование по видам предприятий: сколько рабочих обслуживает единицу и срок службы в игровых годах (вики «Износ оборудования»)
+export const EQUIP = {
+  factory: { name: 'Производственная линия', icon: '🏭', per: 10, life: 1.15 },
+  cropfarm: { name: 'Трактор', icon: '🚜', per: 2, life: 2.5 },
+  livestock: { name: 'Стадо', icon: '🐄', per: 1, life: 3.5 },
+  sawmill: { name: 'Тяжёлое оборудование', icon: '🪚', per: 10, life: 2 },
+  mine: { name: 'Горное оборудование', icon: '⛏️', per: 10, life: 2 },
+  oilwell: { name: 'Горное оборудование', icon: '⛏️', per: 10, life: 2 },
+  warehouse: { name: 'Автопогрузчик', icon: '🚜', per: 1, life: 2 },
+  construction: { name: 'Кран', icon: '🏗️', per: 50, life: 2 },
+  lab: { name: 'Прибор', icon: '🔬', per: 4, life: 1.6 },
+  restaurant: { name: 'Холодильник', icon: '🧊', per: 2, life: 3 },
+  salon: { name: 'Оборудование салона', icon: '💺', per: 2, life: 1.5 },
+  autoservice: { name: 'Станки', icon: '🔧', per: 1, life: 1.2 },
+  // магазинам и теплицам оборудование не нужно
+};
+export const GAME_YEAR = 365;
+
+// Уровень компании (= уровень персонажа в Бизмании): опыт за работу предприятий и недвижимости
+export const COMPANY_MAX_LEVEL = 100;
+export const companyXpNeed = l => Math.round(8000 * Math.pow(l, 1.8));
+// Денежный бонус за новый уровень (вики «Развитие компании», в масштабе нашей экономики)
+export const LEVEL_BONUS = { 2: 50000, 3: 75000, 4: 100000, 5: 125000, 6: 125000, 7: 150000, 8: 150000, 9: 175000, 10: 200000, 11: 225000, 12: 250000, 13: 275000, 14: 300000, 15: 325000 };
+// Возможности, открывающиеся с уровнем компании
+export const FEATURES = { specialists: 5, autoSupply: 7, loans: 11 };
+export const AUTO_SUPPLY_ENT_LEVEL = 8;
 
 // Строительные компании-подрядчики
 export const CONTRACTORS = {
@@ -83,7 +120,11 @@ export const HQ = {
   manage: { name: 'Управляющий отдел',      label: 'Предприятий',            limit: l => 6 + 3 * (l - 1) },
   prod:   { name: 'Производственный отдел', label: 'Производимые продукты',  limit: l => 6 + 3 * (l - 1) },
   build:  { name: 'Строительный отдел',     label: 'Одновременных строек',   limit: l => 2 + (l - 1) },
+  finance: { name: 'Финансовый отдел',      label: 'Предел средств на счету', limit: l => 1000000 * 2 ** (l - 1), money: true },
+  mining: { name: 'Шахтёрский отдел',       label: 'Добываемые ископаемые',  limit: l => l },
 };
+// Сверх предела финансового отдела каждую неделю списывается 10% излишка (как в Бизмании)
+export const FINANCE_PENALTY = 0.1;
 export const HQ_MAX = 10;
 export const hqLimit = (s, k) => HQ[k].limit(s.hq?.[k] || 1);
 export const hqUpgradeCost = l => 25000 * l * l;
@@ -132,6 +173,13 @@ export const EVENTS = [
 ];
 
 // Названия арендаторов для коммерции и офисов
+// Какому профилю торговли соответствует арендатор (для конкуренции магазинов)
+export const TENANT_PROFILE = {
+  'Кафе «Ромашка»': 'restaurant', 'Пекарня «Колосок»': 'shop:grocery', 'Аптека «Здоровье»': 'shop:pharmacy', 'Цветы': 'shop:jewelry',
+  'Продукты 24': 'shop:grocery', 'Барбершоп «Борода»': 'salon', 'Пиццерия «Тесто»': 'restaurant', 'Магазин «Обувь»': 'shop:clothes',
+  'Кофейня «Зерно»': 'restaurant', 'Салон связи': 'shop:electronics', 'Книжный «Буква»': 'shop:kids', 'Зоомагазин «Лапа»': 'shop:department',
+  'Ремонт телефонов': 'shop:electronics', 'Суши «Васаби»': 'restaurant', 'Химчистка': 'shop:department',
+};
 export const TENANTS = {
   comm: ['Кафе «Ромашка»', 'Пекарня «Колосок»', 'Аптека «Здоровье»', 'Цветы', 'Продукты 24', 'Барбершоп «Борода»', 'Пиццерия «Тесто»',
     'Магазин «Обувь»', 'Кофейня «Зерно»', 'Салон связи', 'Книжный «Буква»', 'Зоомагазин «Лапа»', 'Ремонт телефонов', 'Суши «Васаби»', 'Химчистка'],

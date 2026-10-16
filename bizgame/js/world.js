@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from './../vendor/OrbitControls.js';
 import { GRID, isRoad, BUILDINGS, contractorInfo, RIVALS, PLAYER_COLOR } from './data.js';
+import { shopRadius } from './production.js';
 
 const CELL = 10;
 const OFF = (GRID - 1) / 2;
@@ -165,6 +166,26 @@ function makePolice(b, tex) {
   return { g, wins, blink: [red, blue] };
 }
 
+function makeSchool(b, tex) {
+  const g = new THREE.Group(), wins = [];
+  const h = b.floors * FLOOR;
+  // П-образное здание: центральный корпус и два крыла
+  const m = windowMat(tex, 8, b.floors);
+  g.add(box(8, h, 3, m, 0, 0, -2.4)); wins.push(m);
+  const m2 = windowMat(tex, 2, b.floors);
+  g.add(box(2.2, h, 3.4, m2, -2.9, 0, 0.8), box(2.2, h, 3.4, m2, 2.9, 0, 0.8)); wins.push(m2);
+  g.add(box(8.3, 0.35, 3.3, '#b45309', 0, h, -2.4));
+  g.add(box(2.5, 0.35, 3.7, '#b45309', -2.9, h, 0.8), box(2.5, 0.35, 3.7, '#b45309', 2.9, h, 0.8));
+  // часы на фасаде
+  g.add(cyl(0.7, 0.7, 0.12, '#f8fafc', 0, h - 1.4, -0.85, 20).rotateX(Math.PI / 2));
+  g.add(box(0.08, 0.5, 0.05, '#1f2937', 0, h - 1.2, -0.75), box(0.4, 0.08, 0.05, '#1f2937', 0.15, h - 1.4, -0.75));
+  // спортплощадка с воротами
+  g.add(box(3.4, 0.06, 2.6, '#16a34a', 0, 0, 2.6));
+  g.add(box(0.1, 0.8, 0.9, '#f8fafc', -1.6, 0, 2.6), box(0.1, 0.8, 0.9, '#f8fafc', 1.6, 0, 2.6));
+  g.add(flag('#facc15', 3.9, 3.9, 6));
+  return { g, wins };
+}
+
 // ---------- стройплощадка ----------
 function totalHeight(b) {
   return b.type === 'residential' ? 3.2 + (b.floors - 1) * FLOOR : b.floors * FLOOR;
@@ -229,6 +250,7 @@ export class World {
       residential: facade('#e7d8c3', ['#5b6b7d', '#6b7f95'], ['#ffd27a', '#ffe9b0', '#ffc35c'], '#f8f1e7'),
       hospital: facade('#f8fafc', ['#93c5fd', '#a5d8ff'], ['#e0f2fe', '#ffffff'], null),
       police: facade('#e2e8f0', ['#475569', '#64748b'], ['#fef3c7', '#e0f2fe'], null),
+      school: facade('#fde68a', ['#92400e', '#a16207'], ['#fef3c7', '#ffffff'], null),
     };
 
     const r = this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -368,10 +390,10 @@ export class World {
       let g, extra = {};
       if (b.state === 'build') g = makeSite(b);
       else {
-        const make = { office: makeOffice, residential: makeResidential, hospital: makeHospital, police: makePolice }[b.type];
+        const make = { office: makeOffice, residential: makeResidential, hospital: makeHospital, police: makePolice, school: makeSchool }[b.type];
         const r = make(b, this.tex[b.type]);
         g = r.g; extra = { wins: r.wins, blink: r.blink };
-        if (b.owner === 'player' && b.type !== 'police') g.add(flag(PLAYER_COLOR, -4.2, 4.2, 5));
+        if (b.owner === 'player' && b.type !== 'police' && b.type !== 'school') g.add(flag(PLAYER_COLOR, -4.2, 4.2, 5));
       }
       const pos = toWorld(b.i, b.j);
       g.position.set(pos.x, 0.4, pos.z);
@@ -428,10 +450,24 @@ export class World {
   updateCoverage(state) {
     if (this.coverGroup) this.scene.remove(this.coverGroup);
     const g = this.coverGroup = new THREE.Group();
+    const circles = [];
     for (const b of Object.values(state.buildings)) {
-      if (b.state !== 'done' || !this.coverage?.[b.type]) continue;
-      const r = BUILDINGS[b.type].radius * CELL + CELL / 2;
-      const color = b.owner === 'player' ? '#22c55e' : '#ef4444';
+      if (b.state !== 'done' || !this.coverage?.[b.type] || !BUILDINGS[b.type].radius) continue;
+      circles.push([b, BUILDINGS[b.type].radius, b.owner === 'player']);
+    }
+    // магазины: свои точки продаж (радиус зависит от известности) и чужие арендаторы-коммерсанты
+    if (this.coverage?.shops) {
+      const mine = new Set();
+      for (const e of Object.values(state.enterprises)) {
+        const h = e.host && state.buildings[e.host];
+        if (h && !mine.has(h.id)) { mine.add(h.id); circles.push([h, shopRadius(e), true]); }
+      }
+      for (const b of Object.values(state.buildings))
+        if (b.state === 'done' && !mine.has(b.id) && b.tenants?.comm?.length) circles.push([b, 3, false]);
+    }
+    for (const [b, rad, own] of circles) {
+      const r = rad * CELL + CELL / 2;
+      const color = own ? '#22c55e' : '#ef4444';
       const disc = new THREE.Mesh(new THREE.CircleGeometry(r, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.13, depthWrite: false }));
       const ring = new THREE.Mesh(new THREE.RingGeometry(r - 0.4, r, 64), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, depthWrite: false }));
       const p = toWorld(b.i, b.j);

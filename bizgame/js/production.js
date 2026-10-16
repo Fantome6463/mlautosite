@@ -4,6 +4,7 @@
 import {
   GOODS, RECIPES, ENTERPRISES, MARKET_SALARY, IMPORT_MARKUP, WHOLESALE_RATE, NPC_QUALITY,
   SHOP_UNITS_PER_WORKER, TRANSPORT_PER_UNIT, DEPOT, hqLimit, PROFESSIONS, SPEC_NAMES, SPEC_FACES, specSalary,
+  EQUIP, GAME_YEAR, FEATURES, AUTO_SUPPLY_ENT_LEVEL, TENANT_PROFILE,
 } from './data.js';
 import { entDef, canMake, recipesFor, sellsList, accepts } from './catalog.js';
 import { pay as ledgerPay, flow } from './ledger.js';
@@ -58,7 +59,10 @@ export const maxWorkers = e => e.divs.reduce((a, d) => a + divMax(e, d), 0);
 export const levelOf = e => e.divs.reduce((a, d) => a + d.level, 0);
 export const freeLevels = e => Math.max(0, (e.lvl || 1) - levelOf(e));
 const NO_FREE = 'Нет свободного уровня: копите опыт предприятия — он идёт за производство и продажи';
-function gainXp(e, v, news) {
+// Часть опыта предприятий получает компания (как президент в Бизмании)
+export const COMPANY_XP_SHARE = 0.35;
+function gainXp(s, e, v, news) {
+  if (v > 0) s.compXpGain = (s.compXpGain || 0) + v * COMPANY_XP_SHARE;
   if (!(v > 0) || e.lvl >= ENT_MAX_LEVEL) return;
   if (freeLevels(e) >= XP_FREE_CAP) return; // 5 неиспользованных звёзд — опыт не копится
   e.xp = (e.xp || 0) + v;
@@ -115,6 +119,7 @@ export const hostRent = (s, e) => {
 
 // ---------- лимиты штаб-квартиры ----------
 export const products = s => new Set(Object.values(s.enterprises).flatMap(e => e.divs.filter(d => d.recipe && canMake(e, d.recipe)).map(d => d.recipe)));
+export const minedTypes = s => new Set(Object.values(s.enterprises).filter(e => e.type === 'mine').map(e => e.sub));
 export const staffTotal = s => Object.values(s.enterprises).reduce((a, e) => a + workersOf(e), 0);
 // Можно ли начать выпуск продукта (с учётом того, что подразделение перестанет делать старый)
 export function canProduce(s, recipe, leaving = null) {
@@ -128,7 +133,36 @@ export function canProduce(s, recipe, leaving = null) {
 }
 
 // ---------- создание и управление ----------
-const newDiv = (s, e, recipe) => ({ id: s.nextId++, recipe, level: 1, workers: 0, target: entDef(e).workers, on: true, wear: 0, eq: 3, train: 0, trainOn: false });
+const newDiv = (s, e, recipe) => {
+  const d = { id: s.nextId++, recipe, level: 1, workers: 0, target: entDef(e).workers, on: true, wear: 0, eq: 3, train: 0, trainOn: false };
+  d.eqN = eqNeed(e, d); // новое подразделение приходит с полным комплектом оборудования
+  return d;
+};
+
+// ---------- оборудование в штуках: станки, линии, тракторы… (вики «Оборудование», «Износ оборудования») ----------
+export const equipOf = e => EQUIP[e.type] || null;
+export const eqNeed = (e, d) => (equipOf(e) ? Math.ceil(divMax(e, d) / equipOf(e).per) : 0);
+export const eqFill = (e, d) => { const n = eqNeed(e, d); return n ? Math.min(1, (d.eqN ?? n) / n) : 1; };
+export const wearPerDay = e => (equipOf(e) ? 1 / (equipOf(e).life * GAME_YEAR) : 0);
+// Цена единицы оборудования качества eq
+export const unitPrice = (e, eq) => {
+  const E = equipOf(e);
+  if (!E) return 0;
+  const unitsL1 = Math.ceil(entDef(e).workers / E.per);
+  return Math.round((entDef(e).cost * 0.15 / unitsL1) * (eq / 3));
+};
+// Докупить недостающее оборудование (того же качества)
+export function fillEquipment(s, e, d) {
+  const miss = Math.max(0, eqNeed(e, d) - (d.eqN || 0));
+  if (!miss) return { ok: true };
+  const cost = miss * unitPrice(e, d.eq || 3);
+  if (s.money < cost) return { error: `Нужно ${cost.toLocaleString('ru-RU')} ₽` };
+  ledgerPay(s, -cost, 'equipment', { party: 'Универсальные склады', from: e.name, type: `${equipOf(e).name} ×${miss}` });
+  e.invested += Math.round(cost * 0.5);
+  d.wear = ((d.eqN || 0) * d.wear) / ((d.eqN || 0) + miss); // новое без износа — износ смешивается
+  d.eqN = (d.eqN || 0) + miss;
+  return { ok: true };
+}
 
 // ---------- квалификация и оборудование (как в Бизмании) ----------
 // Квалификация = городская + обучение (до +4). Оборудование качества q требует квалификации q × 1,2.
@@ -137,28 +171,61 @@ export const qualOf = (s, d) => Math.round(((s.cityQual || 5) + (d.train || 0)) 
 export const reqQual = d => Math.round((d.eq || 3) * 1.2 * 100) / 100;
 export const qualFactor = (s, d) => Math.pow(Math.min(1, qualOf(s, d) / reqQual(d)), 1.5);
 export const eqFactor = d => 0.7 + 0.1 * (d.eq || 3);
-export const trainCost = d => d.workers * 5; // ₽ в день
-export const equipCost = (e, d, eq) => Math.round(entDef(e).cost * 0.15 * d.level * (eq / 3));
+export const trainCost = (e, d) => Math.round(d.workers * e.salary * 0.5); // ₽ в день, пока квалификация растёт
+// Заменить всё оборудование подразделения на новое качества eq
+export const equipCost = (e, d, eq) => eqNeed(e, d) * unitPrice(e, eq);
 export function replaceEquipment(s, e, d, eq) {
+  if (!equipOf(e)) return { error: 'Здесь оборудование не нужно' };
   eq = clamp(Math.round(eq), 1, 10);
   const cost = equipCost(e, d, eq);
   if (s.money < cost) return { error: `Нужно ${cost.toLocaleString('ru-RU')} ₽` };
-  ledgerPay(s, -cost, 'equipment', { party: 'Универсальные склады', from: e.name, type: `Оборудование качества ${eq}` });
+  ledgerPay(s, -cost, 'equipment', { party: 'Универсальные склады', from: e.name, type: `${equipOf(e).name}: качество ${eq}` });
   e.invested += Math.round(cost * 0.5);
-  d.eq = eq; d.wear = 0;
+  d.eq = eq; d.wear = 0; d.eqN = eqNeed(e, d);
   return { ok: true };
 }
 
 // ---------- реклама и известность (для магазинов, ресторанов, салонов) ----------
 export const AD_LEVELS = [0, 40, 50, 75, 100];
 export const adCost = (e, pctv) => Math.round(pctv * 4 * Math.max(1, levelOf(e)));
-export const crowdFactor = e => 0.4 + 0.8 * (e.aware ?? 0.2);
+// Известность = базовые 25% + реклама; радиус охвата: 50% → +20%, 100% → +50% к радиусу при 25% (вики «Известность и реклама»)
+export const BASE_AWARE = 0.25;
+export const shopRadius = e => 3 * (1 + 0.5 * clamp(((e.aware ?? BASE_AWARE) - BASE_AWARE) / (1 - BASE_AWARE), 0, 1));
+export const profileOf = e => (e.type === 'shop' ? `shop:${e.sub}` : e.type);
+// Покупатели вокруг дома: жители в радиусе (ближние важнее) + офисные работники по дороге домой; конкуренты того же профиля
+export function catchment(s, b, R, profile, selfId = null) {
+  let pop = 0, comp = 0;
+  for (const x of Object.values(s.buildings)) {
+    if (x.state !== 'done') continue;
+    const dist = Math.hypot(x.i - b.i, x.j - b.j);
+    if (dist > R) continue;
+    const k = 1 - dist / (R + 1);
+    if (x.units.apt) pop += x.units.apt.occ * 2.4 * k;
+    if (x.units.office) pop += x.units.office.occ * 8 * 0.3 * k;
+    if (profile) for (const n of x.tenants?.comm || []) if (TENANT_PROFILE[n] === profile) comp++;
+  }
+  if (profile) for (const e of Object.values(s.enterprises)) {
+    if (e.id === selfId || !e.host || profileOf(e) !== profile) continue;
+    const h = s.buildings[e.host];
+    if (h && Math.hypot(h.i - b.i, h.j - b.j) <= R) comp++;
+  }
+  return { pop: Math.round(pop), comp };
+}
+// Ассортимент магазина растёт с уровнем отдела (вики «Магазин»)
+export function availableGoods(e) {
+  const d = entDef(e);
+  if (!d.goods) return sellsList(e.type, e.sub);
+  const top = Math.max(1, ...e.divs.map(x => x.level));
+  return d.goods.slice(0, 4 + 2 * (top - 1));
+}
+export const goodUnlockLevel = (e, g) => { const i = entDef(e).goods?.indexOf(g) ?? -1; return i < 4 ? 1 : Math.ceil((i - 3) / 2) + 1; };
 // Рекомендованная цена с учётом качества; дороже 2,5 средней по городу не покупают
 export const recommendedPrice = (s, g, q) => Math.max(1, Math.round(s.prices[g] * (0.85 + 0.05 * (q || 3))));
 export const PRICE_CAP = 2.5;
 export const divCost = e => Math.round(entDef(e).cost * 0.6);
 export const divUpgradeCost = (e, d) => Math.round(entDef(e).cost * 0.5 * d.level);
-export const repairCost = (e, d) => Math.round(entDef(e).cost * 0.25 * d.wear * d.level);
+// Ремонт бесплатный: из изношенного оборудования собирается меньше целого (вики «Оборудование»)
+export const repairLoss = d => Math.floor((d.eqN || 0) * (d.wear || 0));
 const emptyLast = () => ({ revenue: 0, expense: 0, produced: {}, sold: {} });
 
 // opts: { hostId, recipe, level (уровень компании), name }
@@ -175,6 +242,10 @@ export function createEnterprise(s, type, sub, opts = {}) {
     host = s.buildings[opts.hostId];
     if (!host || shopSlots(s, host) <= 0) return { error: 'Нужно свободное коммерческое помещение в жилом доме' };
   }
+  if (type === 'mine') {
+    const mined = minedTypes(s);
+    if (!mined.has(sub) && mined.size >= hqLimit(s, 'mining')) return { error: `Шахтёрский отдел: не больше ${hqLimit(s, 'mining')} видов ископаемых. Повысьте уровень в штаб-квартире.` };
+  }
   const options = recipesFor(type, sub);
   let recipe = null;
   if (options.length && !def.goods) {
@@ -188,8 +259,8 @@ export function createEnterprise(s, type, sub, opts = {}) {
   const count = Object.values(s.enterprises).filter(e => e.type === type && e.sub === (sub || null)).length + 1;
   const e = {
     id: s.nextId++, type, sub: sub || null, name: opts.name?.trim() || `${def.name} №${count}`, invested: def.cost,
-    salary: s.marketSalary, divs: [], stock: {}, buy: {}, autoSell: {}, prices: {}, autoSupply: { on: false, days: 3 },
-    research: null, resDir: 'q', progress: 0, lvl: 1, xp: 0, ad: 0, aware: 0.2, built: s.day, host: host ? host.id : null, last: emptyLast(), hist: [], flh: [],
+    salary: s.marketSalary, divs: [], stock: {}, buy: {}, autoSell: {}, prices: {}, autoSupply: { on: false, weeks: 1 },
+    research: null, resDir: 'q', progress: 0, lvl: 1, xp: 0, ad: 0, aware: BASE_AWARE, built: s.day, host: host ? host.id : null, last: emptyLast(), hist: [], flh: [],
   };
   e.divs.push(newDiv(s, e, recipe));
   s.enterprises[e.id] = e;
@@ -219,7 +290,9 @@ export function upgradeDiv(s, e, d) {
   const cost = divUpgradeCost(e, d);
   if (s.money < cost) return { error: `Нужно ${cost.toLocaleString('ru-RU')} ₽` };
   ledgerPay(s, -cost, 'equipment', { party: 'Универсальные склады', from: e.name, type: 'Расширение подразделения' });
+  const before = eqNeed(e, d);
   e.invested += cost; d.level++; d.target = divMax(e, d);
+  d.eqN = (d.eqN ?? before) + (eqNeed(e, d) - before); // оборудование для расширения входит в цену
   return { ok: true };
 }
 export function removeDiv(s, e, d) {
@@ -231,10 +304,7 @@ export function removeDiv(s, e, d) {
   return { ok: true };
 }
 export function repairDiv(s, e, d) {
-  const cost = repairCost(e, d);
-  if (!cost) return { ok: true };
-  if (s.money < cost) return { error: `Нужно ${cost.toLocaleString('ru-RU')} ₽` };
-  ledgerPay(s, -cost, 'equipment', { party: 'Сервисная служба', from: e.name, type: 'Ремонт оборудования' });
+  d.eqN = Math.max(0, (d.eqN || 0) - repairLoss(d));
   d.wear = 0;
   return { ok: true };
 }
@@ -298,12 +368,14 @@ export const techLevel = (s, g, dir = 'q') => techMap(s, dir)?.[g] || 0;
 export const volFactor = (s, g) => 1 + 0.05 * techLevel(s, g, 'vol');
 export const matFactor = (s, g) => Math.max(0.6, 1 - 0.04 * techLevel(s, g, 'mat'));
 export const wearFactor = d => 1 - d.wear * 0.5;
+// Всё, что даёт оборудование: комплектность, износ, качество и соответствие квалификации
+export const equipFactor = (s, e, d) => (equipOf(e) ? eqFill(e, d) * wearFactor(d) * qualFactor(s, d) * eqFactor(d) : 1);
 
 // Мощность подразделения (без учёта сырья)
 export function divOutput(s, e, d) {
   const r = RECIPES[d.recipe];
   if (!r || !d.on || !canMake(e, d.recipe)) return 0;
-  return r.rate * d.level * (d.workers / divMax(e, d)) * salaryEff(s, e) * specBonus(s, e) * wearFactor(d) * qualFactor(s, d) * eqFactor(d) * volFactor(s, d.recipe);
+  return r.rate * d.level * (d.workers / divMax(e, d)) * salaryEff(s, e) * specBonus(s, e) * equipFactor(s, e, d) * volFactor(s, d.recipe);
 }
 // Прогноз по подразделению: мощность, выпуск с учётом сырья на складе, что ограничивает
 export function divInfo(s, e, d) {
@@ -318,12 +390,14 @@ export function divInfo(s, e, d) {
   return { maxOut: Math.floor(maxOut), out: Math.floor(out), limitBy };
 }
 // Потребность в сырье в день при полной загрузке всех подразделений
+// Авторегулирование снабжения (вики): с 7-го уровня компании для предприятий 8-го уровня и выше
+export const canAutoSupply = (s, e) => (s.compLvl || 1) >= FEATURES.autoSupply && (e.lvl || 1) >= AUTO_SUPPLY_ENT_LEVEL;
 export function inputNeeds(s, e) {
   const need = {};
   for (const d of e.divs) {
     const r = RECIPES[d.recipe];
     if (!r || !d.on) continue;
-    const full = r.rate * d.level * salaryEff(s, e) * specBonus(s, e) * wearFactor(d) * qualFactor(s, d) * eqFactor(d) * volFactor(s, d.recipe) * (d.target / divMax(e, d));
+    const full = r.rate * d.level * salaryEff(s, e) * specBonus(s, e) * equipFactor(s, e, d) * volFactor(s, d.recipe) * (d.target / divMax(e, d));
     for (const g in r.inputs) need[g] = (need[g] || 0) + full * r.inputs[g] * matFactor(s, d.recipe);
   }
   return need;
@@ -360,12 +434,13 @@ export function productionTick(s, { spend, earn, fx, news }) {
 
   // авторегулирование снабжения: держать сырьё на N дней работы
   for (const e of list) {
-    if (!e.autoSupply?.on) continue;
+    if (!e.autoSupply?.on || !canAutoSupply(s, e)) continue;
+    const days = (e.autoSupply.weeks || 1) * 7;
     const need = inputNeeds(s, e);
     const incoming = {};
     for (const c of s.contracts) if (c.to === e.id) incoming[c.good] = (incoming[c.good] || 0) + c.qty;
     for (const g in need) {
-      const want = need[g] * e.autoSupply.days - stockQty(e, g) - (incoming[g] || 0) * e.autoSupply.days;
+      const want = need[g] * days - stockQty(e, g) - (incoming[g] || 0) * days;
       e.buy[g] = Math.max(0, Math.ceil(Math.min(want, need[g] * 2)));
     }
   }
@@ -402,7 +477,7 @@ export function productionTick(s, { spend, earn, fx, news }) {
     for (const d of e.divs) {
       const r = RECIPES[d.recipe];
       if (!r || !d.on || !canMake(e, d.recipe)) continue;
-      d.wear = Math.min(1, d.wear + 0.004);
+      d.wear = Math.min(1, d.wear + wearPerDay(e));
       let n = divInfo(s, e, d).out;
       const netGrow = 1 - Object.values(r.inputs).reduce((a, v) => a + v, 0);
       if (netGrow > 0) n = Math.min(n, freeSpace(e) / netGrow);
@@ -426,25 +501,26 @@ export function productionTick(s, { spend, earn, fx, news }) {
   }
   // продажи горожанам: магазины, рестораны, салоны, автосервисы
   let shopRevenue = 0;
-  const cityPop = s.city?.population || 0;
+  const cityBonus = 1 + 0.1 * ((s.city?.level || 1) - 1);
   for (const e of list) {
     const def = entDef(e);
     if (!def.sells) continue;
     const host = s.buildings[e.host];
     if (!host) continue;
-    const loc = s.plots[`${host.i},${host.j}`].loc;
-    const crowd = 0.5 + Math.min(1, cityPop / 3000);
+    const area = catchment(s, host, shopRadius(e), profileOf(e), e.id);
+    e.area = area;
     const cap = workersOf(e) * SHOP_UNITS_PER_WORKER * salaryEff(s, e) * specBonus(s, e);
     const wants = {};
     let total = 0;
-    for (const g of sellsList(e.type, e.sub)) {
+    for (const g of availableGoods(e)) {
       if (!e.stock[g]) continue;
       const gd = GOODS[g];
       const price = e.prices[g] ?? gd.price;
       if (price > s.prices[g] * PRICE_CAP) continue; // слишком дорого — не берут
       const attr = Math.pow(e.stock[g].q / NPC_QUALITY, 0.6) * Math.pow(s.prices[g] / price, 2.5);
-      const demand = (gd.demand || 5) * loc * crowd * crowdFactor(e) * (s.demandMods[g]?.mult || 1) * (1 + 0.25 * (levelOf(e) - 1));
-      wants[g] = Math.min(stockQty(e, g), demand * (attr / (attr + 1)) * 2 * (0.9 + Math.random() * 0.2));
+      // спрос жителей в охвате на этот товар; делится с конкурентами того же профиля
+      const demand = ((gd.demand || 5) / 250) * area.pop * cityBonus * (s.demandMods[g]?.mult || 1) * (1 + 0.1 * (levelOf(e) - 1));
+      wants[g] = Math.min(stockQty(e, g), demand * (attr / (attr + area.comp + 0.5)) * 1.5 * (0.9 + Math.random() * 0.2));
       total += wants[g];
     }
     // у магазина пропускная способность — продавцы; у ресторанов и салонов — само производство
@@ -498,10 +574,13 @@ export function productionTick(s, { spend, earn, fx, news }) {
   // обучение персонала, реклама
   for (const e of list) {
     for (const d of e.divs) {
-      if (d.trainOn && d.workers > 0) {
-        pay(e, trainCost(d), 'salary', 'Учебный центр');
-        d.train = Math.min(TRAIN_MAX, (d.train || 0) + 0.1);
-      } else d.train = Math.max(0, (d.train || 0) - 0.02);
+      // обучение: пока включено и не достигнут максимум; после отмены квалификация не падает
+      if (d.trainOn && d.workers > 0 && (d.train || 0) < TRAIN_MAX) {
+        pay(e, trainCost(e, d), 'salary', 'Учебный центр');
+        d.train = Math.min(TRAIN_MAX, (d.train || 0) + 0.04);
+      }
+      // износ у работающего оборудования, которое не производит (склады, лаборатории, бригады)
+      if (equipOf(e) && d.on && d.workers > 0 && !RECIPES[d.recipe]) d.wear = Math.min(1, d.wear + wearPerDay(e));
     }
     if (entDef(e).sells) {
       const target = (e.ad || 0) / 100;
@@ -511,7 +590,9 @@ export function productionTick(s, { spend, earn, fx, news }) {
   }
   // зарплаты и содержание, история
   for (const e of list) {
-    pay(e, workersOf(e) * e.salary, 'salary', 'Сотрудники');
+    // в остановленном цехе рабочим платят четверть зарплаты (вики «Завод»)
+    const wages = e.divs.reduce((a, d) => a + d.workers * e.salary * (d.on ? 1 : 0.25), 0);
+    pay(e, wages, 'salary', 'Сотрудники');
     pay(e, entDef(e).upkeep * levelOf(e), 'upkeep', 'Коммунальные службы');
     e.hist.push({ rev: e.last.revenue, exp: e.last.expense });
     if (e.hist.length > 60) e.hist.shift();
@@ -527,7 +608,7 @@ export function productionTick(s, { spend, earn, fx, news }) {
     }
     e.xpExtra = 0;
     e.lastXp = Math.round(v);
-    gainXp(e, v, news);
+    gainXp(s, e, v, news);
   }
   specsTick(s, { spend, news });
   // склады города: подвоз извне и покупки остальных горожан; цена растёт при дефиците
@@ -570,6 +651,7 @@ function newCandidate(s) {
 }
 export function refreshCandidates(s) { s.candidates = Array.from({ length: 6 }, () => newCandidate(s)); }
 export function hireSpec(s, id) {
+  if ((s.compLvl || 1) < FEATURES.specialists) return { error: `Нанимать специалистов можно с ${FEATURES.specialists}-го уровня компании` };
   const c = s.candidates.find(x => x.id === id);
   if (!c) return { error: 'Кандидат уже ушёл' };
   const fee = hireFee(c);
@@ -643,7 +725,9 @@ export function migrateEnterprises(s) {
   for (const e of Object.values(s.enterprises)) {
     if (!e.lvl) { e.lvl = Math.max(1, levelOf(e)); e.xp = 0; }
     e.aware ??= 0.5; e.ad ??= 0; e.resDir ||= 'q';
-    for (const d of e.divs) { d.eq ??= 3; d.train ??= 0; d.trainOn ??= false; }
+    for (const d of e.divs) { d.eq ??= 3; d.train ??= 0; d.trainOn ??= false; d.eqN ??= eqNeed(e, d); }
+    if (e.autoSupply && e.autoSupply.weeks == null) e.autoSupply.weeks = clamp(Math.round((e.autoSupply.days || 7) / 7), 1, 5);
+    if (e.type === 'mine' && !e.sub) e.sub = { ore: 'ore', coal: 'coal', stone: 'stone', sand: 'sand', clay: 'clay', gold: 'gold' }[e.divs[0]?.recipe] || 'stone';
   }
   for (const c of s.contracts) c.good = ren(c.good);
   s.contracts = s.contracts.filter(c => GOODS[c.good]);

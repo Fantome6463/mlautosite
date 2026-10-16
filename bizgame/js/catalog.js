@@ -141,7 +141,7 @@ export const RECIPES = {
   pork: R('livestock:pigs', 100), eggs: R('livestock:chickens', 600), chicken: R('livestock:chickens', 120),
   wool: R('livestock:sheep', 150), fur: R('livestock:fur', 40), fish: R('livestock:fish', 150),
   wood: R('sawmill', 300),
-  ore: R('mine', 225), coal: R('mine', 250), stone: R('mine', 300), sand: R('mine', 360), clay: R('mine', 300), gold: R('mine', 6),
+  ore: R('mine:ore', 225), coal: R('mine:coal', 250), stone: R('mine:stone', 300), sand: R('mine:sand', 360), clay: R('mine:clay', 300), gold: R('mine:gold', 6),
   oil: R('oilwell', 180),
   // пищевой завод
   flour: R('factory:food', 180, { grain: 2 }), bread: R('factory:food', 180, { flour: 1 }), cheese: R('factory:food', 75, { milk: 3 }),
@@ -200,8 +200,8 @@ export const ENTERPRISES = {
       clothes: sub('Магазин одежды', '👠', 'Торговля одеждой и обувью, а также аксессуарами', { goods: ['tshirt', 'jeans', 'dress', 'shoes', 'coat', 'scarf'], cost: 35000 }),
       department: sub('Универмаг', '🛋️', 'Товары для дома, мебель и другие промышленные товары', { goods: ['furniture', 'chair', 'dishes', 'lamp', 'detergent'], cost: 40000 }),
       electronics: sub('Магазин электроники', '📺', 'Бытовая техника и электроника, компьютерные товары', { goods: ['tv', 'phone', 'laptop', 'headphones', 'lamp'], cost: 55000 }),
-      jewelry: sub('Ювелирный магазин', '💍', 'Парфюмерия, часы, ювелирные изделия', { goods: ['ring', 'watch', 'perfume', 'sunglasses'], cost: 100000, minLevel: 3 }),
-      auto: sub('Автомагазин', '🚗', 'От автозапчастей до автомобилей', { goods: ['car', 'moto', 'tires', 'motoroil', 'fuel'], cost: 65000, minLevel: 3 }),
+      jewelry: sub('Ювелирный магазин', '💍', 'Парфюмерия, часы, ювелирные изделия', { goods: ['ring', 'watch', 'perfume', 'sunglasses'], cost: 100000 }),
+      auto: sub('Автомагазин', '🚗', 'От автозапчастей до автомобилей', { goods: ['car', 'moto', 'tires', 'motoroil', 'fuel'], cost: 65000 }),
       buildshop: sub('Магазин стройматериалов', '🧱', 'Строительные и отделочные материалы', { goods: ['paint', 'tiles', 'tools', 'doors', 'cement'], cost: 40000 }),
       pharmacy: sub('Аптека', '💊', 'Лекарства, витамины, здоровый образ жизни', { goods: ['pills', 'bandage', 'thermometer', 'mask'], cost: 37000 }),
       sport: sub('Спортивный магазин', '⚽', 'Спортивное оборудование, инвентарь и многое другое для спорта', { goods: ['ball', 'bicycle', 'skis', 'racket'], cost: 40000 }),
@@ -215,15 +215,15 @@ export const ENTERPRISES = {
       goods: sub('Склад товаров', '🧺', 'Склад промышленных товаров народного потребления', { groups: ['clothes', 'home', 'electronics', 'jewelry', 'pharma', 'sport', 'kids'] }),
       food: sub('Склад продуктов', '🍎', 'Склад продуктов питания и сельскохозяйственной продукции', { groups: ['agro', 'animal', 'food'] }),
       tech: sub('Склад техники', '🚜', 'Склад техники, оборудования, автомобилей', { groups: ['auto', 'electronics', 'metal'], cost: 40000 }),
-      chem: sub('Склад химикатов', '🧪', 'Склад химических и нефтепродуктов', { groups: ['chem'], cost: 60000, minLevel: 4 }),
-      universal: sub('Универсальный склад', '🏬', 'Склад всех товаров', { groups: null, cost: 80000, minLevel: 5 }),
+      chem: sub('Склад химикатов', '🧪', 'Склад химических и нефтепродуктов', { groups: ['chem'], cost: 60000 }),
+      universal: sub('Универсальный склад', '🏬', 'Склад всех товаров', { groups: null, cost: 80000 }),
     },
   },
   factory: {
     name: 'Завод', icon: '🏭', desc: 'Завод производит продукцию, перерабатывая сырьё', cost: 50000, workers: 30, upkeep: 200, storage: 4000,
     subs: {
       wood: sub('Деревообрабатывающий завод', '🪚', 'Производство продукции из древесины: мебель, бумага, стройматериалы'),
-      auto: sub('Автомобильный завод', '🚗', 'Производство автомобилей, мотоциклов, шин и комплектующих', { cost: 120000, minLevel: 3 }),
+      auto: sub('Автомобильный завод', '🚗', 'Производство автомобилей, мотоциклов, шин и комплектующих', { cost: 120000 }),
       build: sub('Завод стройматериалов', '🧱', 'Производство строительных и отделочных материалов', { cost: 60000 }),
       food: sub('Пищевой завод', '🍞', 'Производство продуктов питания и напитков'),
       apparel: sub('Фабрика', '👕', 'Производство одежды, обуви и аксессуаров'),
@@ -231,9 +231,9 @@ export const ENTERPRISES = {
       jewelry: sub('Ювелирный завод', '💍', 'Производство ювелирных украшений и часов', { cost: 45000 }),
       pharma: sub('Фармацевтический завод', '💊', 'Производство фармацевтической продукции', { cost: 60000 }),
       sport: sub('Завод спортивных товаров', '⚽', 'Производство спортивной продукции', { cost: 45000 }),
-      machine: sub('Машиностроительный завод', '⚙️', 'Производство оборудования и техники', { cost: 150000, minLevel: 4 }),
-      metal: sub('Металлургический завод', '🔩', 'Производство стали и изделий из неё', { cost: 180000, minLevel: 4 }),
-      chem: sub('Химический завод', '🧪', 'Химическое, нефтеперерабатывающее и нефтехимическое производство', { cost: 170000, minLevel: 4 }),
+      machine: sub('Машиностроительный завод', '⚙️', 'Производство оборудования и техники', { cost: 150000 }),
+      metal: sub('Металлургический завод', '🔩', 'Производство стали и изделий из неё', { cost: 180000 }),
+      chem: sub('Химический завод', '🧪', 'Химическое, нефтеперерабатывающее и нефтехимическое производство', { cost: 170000 }),
     },
   },
   sawmill: { name: 'Лесопилка', icon: '🌲', desc: 'Производство древесины', cost: 25000, workers: 15, upkeep: 60, storage: 3000 },
@@ -252,19 +252,46 @@ export const ENTERPRISES = {
   autoservice: { name: 'Автосервис', icon: '🚘', desc: 'Ремонтируем автомобили, чтобы были как новые', cost: 40000, workers: 10, upkeep: 120, storage: 1000, sells: true },
   hotel: { name: 'Отель', icon: '🏨', desc: 'Отель принимает путешественников со всего мира', cost: 120000, later: true },
   construction: { name: 'Строительное предприятие', icon: '👷', desc: 'Строит ваши жилые, коммерческие и офисные здания своими силами', cost: 60000, workers: 40, upkeep: 150, storage: 8000 },
-  mine: { name: 'Шахта', icon: '⛏️', desc: 'В шахте добываются полезные ископаемые', cost: 60000, workers: 25, upkeep: 150, storage: 3000 },
+  mine: {
+    name: 'Шахта', icon: '⛏️', desc: 'В шахте добываются полезные ископаемые', cost: 60000, workers: 25, upkeep: 150, storage: 3000,
+    subs: {
+      gold: sub('Золотая шахта', '🪙', 'Добыча золота', { cost: 120000 }), sand: sub('Песчаный карьер', '⏳', 'Добыча песка'),
+      clay: sub('Глиняный карьер', '🟤', 'Добыча глины'), ore: sub('Железнорудная шахта', '⛰️', 'Добыча железной руды'),
+      coal: sub('Угольная шахта', '⚫', 'Добыча угля'), stone: sub('Шахта минералов', '🪨', 'Добыча камня и минералов'),
+    },
+  },
   transport: { name: 'Транспортное предприятие', icon: '🚛', desc: 'Транспортное предприятие осуществляет перевозку грузов', cost: 200000, later: true },
-  oilwell: { name: 'Нефтяная скважина', icon: '🛢️', desc: 'Добыча нефти', cost: 90000, workers: 15, upkeep: 200, storage: 3000, minLevel: 3 },
-  lab: { name: 'Лаборатория', icon: '🔬', desc: 'Все исследования: технологии повышают качество товаров', cost: 70000, workers: 12, upkeep: 200, storage: 0, minLevel: 3 },
+  oilwell: { name: 'Нефтяная скважина', icon: '🛢️', desc: 'Добыча нефти', cost: 90000, workers: 15, upkeep: 200, storage: 3000 },
+  lab: { name: 'Лаборатория', icon: '🔬', desc: 'Все исследования: технологии повышают качество товаров', cost: 70000, workers: 12, upkeep: 200, storage: 0 },
   power: { name: 'Электростанция', icon: '⚡', desc: 'Электростанция осуществляет производство электричества', cost: 3000000, later: true },
 };
+
+// ---------- открытие видов предприятий по уровню компании (вики Бизмании, «Развитие компании») ----------
+export const UNLOCKS = {
+  'shop:grocery': 1, 'shop:clothes': 1, 'factory:food': 1, 'factory:apparel': 1,
+  'shop:department': 2, livestock: 2, 'shop:pharmacy': 3, greenhouse: 3, 'shop:electronics': 4, 'shop:kids': 4,
+  restaurant: 5, salon: 5, 'shop:sport': 6, 'warehouse:food': 7, 'warehouse:goods': 7, 'shop:buildshop': 8, 'shop:jewelry': 9,
+  'factory:pharma': 10, hotel: 11, autoservice: 11, 'factory:sport': 12, 'shop:auto': 13, 'factory:wood': 14, cropfarm: 15,
+  'warehouse:materials': 16, 'factory:jewelry': 17, 'factory:auto': 18, 'factory:electronic': 19, 'warehouse:tech': 20,
+  'factory:build': 21, sawmill: 22, construction: 23, 'factory:machine': 24, 'warehouse:chem': 25, 'mine:gold': 26,
+  'factory:metal': 27, 'mine:sand': 28, 'mine:clay': 29, 'factory:chem': 30, 'mine:ore': 31, 'mine:coal': 32, transport: 34,
+  'mine:stone': 36, oilwell: 37, lab: 38, 'warehouse:universal': 80, power: 100,
+};
+// Минимальный уровень компании для вида (и подвида) предприятия
+export function unlockLevel(type, sb) {
+  if (sb && UNLOCKS[`${type}:${sb}`] != null) return UNLOCKS[`${type}:${sb}`];
+  if (UNLOCKS[type] != null) return UNLOCKS[type];
+  const subs = ENTERPRISES[type]?.subs;
+  return subs ? Math.min(...Object.keys(subs).map(k => unlockLevel(type, k))) : 1;
+}
 
 // ---------- справочные функции ----------
 export const subOf = e => ENTERPRISES[e.type]?.subs?.[e.sub] || null;
 // Описание предприятия с учётом подвида: имя, иконка, стоимость и т. п.
 export function entDef(e) {
   const t = ENTERPRISES[e.type], s = t.subs?.[e.sub];
-  return s ? { ...t, ...s, typeName: t.name } : { ...t, typeName: t.name };
+  const minLevel = unlockLevel(e.type, e.sub);
+  return s ? { ...t, ...s, typeName: t.name, minLevel } : { ...t, typeName: t.name, minLevel };
 }
 export const defOf = (type, sb) => entDef({ type, sub: sb });
 const keyOf = (type, sb) => (sb ? `${type}:${sb}` : type);

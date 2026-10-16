@@ -2,7 +2,7 @@
 // Модуль не знает ни про DOM, ни про 3D — только данные.
 import {
   UNITS, BUILDINGS, CONTRACTORS, ADVANCE, START_MONEY, GRID, isRoad, RIVALS, EVENTS, TENANTS, CATEGORIES, OWN,
-  HQ, HQ_MAX, hqLimit, hqUpgradeCost,
+  HQ, HQ_MAX, hqLimit, hqUpgradeCost, FINANCE_PENALTY, cityLevelOf, COMPANY_MAX_LEVEL, companyXpNeed, LEVEL_BONUS,
 } from './data.js';
 import {
   initProduction, productionTick, enterprisesValue, goodsEvent, shopsIn, stockQty, takeStock, maxWorkers, salaryEff, specBonus, refreshCandidates,
@@ -40,8 +40,8 @@ export function newGame() {
     city: { households: 0, jobs: 0, demand: { apt: 0, office: 0, comm: 0 } },
     rivals: RIVALS.map(r => ({ ...r, worth: 200000 + Math.random() * 150000 })),
     company: 'Моя компания', cityName: 'Новоград',
-    hq: { staff: 1, manage: 1, prod: 1, build: 1 },
-    accNo: 100000 + Math.floor(Math.random() * 900000),
+    hq: { staff: 1, manage: 1, prod: 1, build: 1, finance: 1, mining: 1 },
+    accNo: 100000 + Math.floor(Math.random() * 900000), compLvl: 1, compXp: 0,
   };
   const c = (GRID - 1) / 2;
   for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
@@ -74,6 +74,9 @@ export function load() {
     s.hq ||= { staff: 1, manage: 1, prod: 1, build: 1 };
     s.cityName ||= 'Новоград';
     s.accNo ||= 100000 + Math.floor(Math.random() * 900000);
+    s.hq.finance ||= 1; s.hq.mining ||= 1;
+    // раньше уровень компании считался по капиталу — переносим его как стартовый
+    if (!s.compLvl) { s.compLvl = Math.max(1, Math.floor(Math.log2(Math.max(1, netWorth(s)) / 125000)) + 1); s.compXp = 0; }
     initLedger(s);
     s.specs ||= []; s.candidates ||= [];
     migrateEnterprises(s);
@@ -90,7 +93,20 @@ const mod = (s, k) => s.mods[k]?.mult || 1;
 
 export const materialsFor = (type, floors) => Object.fromEntries(Object.entries(BUILDINGS[type].materials).map(([g, n]) => [g, n * floors]));
 // Уровень компании растёт с капиталом: открывает новые виды предприятий
-export const companyLevel = s => Math.max(1, Math.floor(Math.log2(Math.max(1, netWorth(s)) / 125000)) + 1);
+// Уровень компании (= уровень персонажа в Бизмании) растёт с опытом и открывает новые виды предприятий
+export const companyLevel = s => s.compLvl || 1;
+function companyXp(s, v) {
+  if (!(v > 0) || s.compLvl >= COMPANY_MAX_LEVEL) return;
+  s.compXp += v;
+  s.lastCompXp = Math.round(v);
+  while (s.compLvl < COMPANY_MAX_LEVEL && s.compXp >= companyXpNeed(s.compLvl)) {
+    s.compXp -= companyXpNeed(s.compLvl);
+    s.compLvl++;
+    const bonus = LEVEL_BONUS[s.compLvl] || 0;
+    if (bonus) pay(s, bonus, 'other', { party: 'Администрация игры', type: `Бонус за ${s.compLvl}-й уровень компании` });
+    addNews(s, `🎖️ Компания достигла ${s.compLvl}-го уровня!${bonus ? ' Бонус ' + fmt(bonus) + '.' : ''} Открылись новые возможности.`);
+  }
+}
 export const builders = s => Object.values(s.enterprises).filter(e => e.type === 'construction');
 
 export function quote(s, type, floors, contractor) {
@@ -183,7 +199,7 @@ export function sell(s, id) {
 export const refRent = (p, t) => UNITS[t].rent * (0.6 + 0.4 * p.loc);
 
 export function coverage(s, i, j) {
-  const res = { health: null, safety: null };
+  const res = { health: null, safety: null, edu: null };
   for (const x of Object.values(s.buildings)) {
     const d = BUILDINGS[x.type];
     if (!d.service || x.state !== 'done') continue;
@@ -194,7 +210,7 @@ export function coverage(s, i, j) {
 }
 export function serviceFactor(s, i, j) {
   const c = coverage(s, i, j);
-  return 0.85 + (c.health ? 0.15 : 0) + (c.safety ? 0.15 : 0);
+  return 0.85 + (c.health ? 0.15 : 0) + (c.safety ? 0.15 : 0) + (c.edu ? 0.1 : 0);
 }
 const acceptance = (rent, ref) => clamp(1.5 - 0.5 * Math.pow(rent / ref, 2), 0, 1);
 
@@ -277,14 +293,16 @@ export function tick(s) {
   const done = all.filter(b => b.state === 'done');
   const households = occTotal(done, 'apt');
   const jobs = occTotal(done, 'office') * 8 + occTotal(done, 'comm') * 4;
-  const hosp = done.filter(b => b.type === 'hospital').length, pol = done.filter(b => b.type === 'police').length;
-  const cityBonus = 1 + 0.1 * Math.min(hosp, 3) + 0.1 * Math.min(pol, 3);
+  const count = t => done.filter(b => b.type === t).length;
+  const hosp = count('hospital'), pol = count('police'), sch = count('school');
+  const cityLevel = cityLevelOf({ police: pol, hospital: hosp, school: sch });
+  const cityBonus = (1 + 0.1 * Math.min(hosp, 3) + 0.1 * Math.min(pol, 3) + 0.1 * Math.min(sch, 3)) * (1 + 0.1 * (cityLevel - 1));
   const demand = {
     apt: (150 + 4 * s.day + 0.5 * jobs) * cityBonus * mod(s, 'apt'),
     office: (20 + 0.4 * s.day + 0.07 * households) * mod(s, 'office'),
     comm: (4 + 0.06 * s.day + 0.05 * households) * mod(s, 'comm'),
   };
-  s.city = { households, jobs, population: Math.round(households * 2.4), demand };
+  s.city = { households, jobs, population: Math.round(households * 2.4), demand, level: cityLevel, social: { police: pol, hospital: hosp, school: sch } };
 
   // 3. Заселение: спрос делится между зданиями по привлекательности
   for (const t in UNITS) {
@@ -322,6 +340,7 @@ export function tick(s) {
       pay(s, -(expense - tax), 'estate', { party: 'Коммунальные службы', from, type: 'Содержание здания' });
       pay(s, -tax, 'tax', { party: 'Налоговая служба', from, type: 'Налог на землю' });
       (b.hist ||= []).push({ rev: income, exp: expense });
+      s.compXpGain = (s.compXpGain || 0) + income * 0.2; // недвижимость тоже даёт компании опыт
       if (b.hist.length > 60) b.hist.shift();
       if (income > 0) fx.push({ type: 'money', id: b.id, amount: income - expense });
     } else {
@@ -351,7 +370,12 @@ export function tick(s) {
   for (const r of s.rivals) r.worth *= 1.002 + Math.random() * 0.004;
   rivalsBuild(s);
 
-  // 7. Итоги дня
+  // 7. Неделя: налог на прибыль и предел финансового отдела (вики «Налоги», «Штаб-квартира»)
+  if (s.day % 7 === 0) weekly(s);
+  companyXp(s, s.compXpGain || 0);
+  s.compXpGain = 0;
+
+  // 8. Итоги дня
   s.day++;
   s.debtDays = s.money < 0 ? s.debtDays + 1 : 0;
   if (s.debtDays >= 15) { s.bankrupt = true; fx.push({ type: 'bankrupt' }); }
@@ -368,6 +392,33 @@ export function tick(s) {
   return fx;
 }
 
+export const PROFIT_TAX = 0.25;
+// Налог на прибыль платит каждое предприятие и здание отдельно, с учётом убытков прошлых недель (не больше 2× активов)
+function weekly(s) {
+  const units = [
+    ...Object.values(s.enterprises).map(e => ({ o: e, name: e.name, assets: e.invested * 0.6 })),
+    ...mine(s).filter(b => b.state === 'done').map(b => ({ o: b, name: `${BUILDINGS[b.type].name} №${b.id}`, assets: marketValue(b) })),
+  ];
+  let total = 0;
+  for (const { o, name, assets } of units) {
+    const w = (o.hist || []).slice(-7).reduce((a, d) => a + d.rev - d.exp, 0);
+    o.loss = o.loss || 0;
+    if (w <= 0) { o.loss = Math.min(o.loss - w, assets * 2); o.lastTax = 0; continue; }
+    const base = Math.max(0, w - o.loss);
+    o.loss = Math.max(0, o.loss - w);
+    const tax = Math.round(base * PROFIT_TAX);
+    o.lastTax = tax;
+    if (tax) { pay(s, -tax, 'tax', { party: 'Налоговая служба', from: name, type: 'Налог на прибыль 25%' }); total += tax; }
+  }
+  if (total) addNews(s, `🧾 Уплачен налог на прибыль за неделю: ${fmt(total)}`);
+  const cap = hqLimit(s, 'finance');
+  if (s.money > cap) {
+    const fine = Math.round((s.money - cap) * FINANCE_PENALTY);
+    pay(s, -fine, 'tax', { party: 'Налоговая служба', type: 'Штраф: средства сверх лимита финансового отдела' });
+    addNews(s, `⚠️ Деньги сверх лимита финансового отдела (${fmt(cap)}): списано 10% излишка — ${fmt(fine)}. Повысьте отдел или вкладывайте деньги.`);
+  }
+}
+
 // Конкуренты тоже заказывают стройки — город постепенно застраивается
 function rivalsBuild(s) {
   const free = Object.values(s.plots).filter(p => !buildingAt(s, p.i, p.j));
@@ -377,7 +428,7 @@ function rivalsBuild(s) {
   const done = Object.values(s.buildings);
   const hasSocial = t => done.some(b => b.type === t);
   let type = Math.random() < 0.55 ? 'residential' : 'office';
-  if (s.day > 15 && Math.random() < 0.12) type = !hasSocial('hospital') || Math.random() < 0.5 ? 'hospital' : 'police';
+  if (s.day > 15 && Math.random() < 0.15) type = !hasSocial('hospital') ? 'hospital' : !hasSocial('school') ? 'school' : ['hospital', 'police', 'school'][Math.floor(Math.random() * 3)];
   // участки получше выбираются чаще
   const weights = free.map(p => p.loc * p.loc);
   let r = Math.random() * weights.reduce((a, v) => a + v, 0), p = free[0];

@@ -17,7 +17,7 @@ export const CATS = {
   shopRent:   { side: 'exp', group: 'op',  name: 'Аренда' },
   upkeep:     { side: 'exp', group: 'op',  name: 'Содержание предприятий' },
   estate:     { side: 'exp', group: 'op',  name: 'Содержание зданий' },
-  tax:        { side: 'exp', group: 'op',  name: 'Налоговые отчисления (земля)' },
+  tax:        { side: 'exp', group: 'op',  name: 'Налоговые отчисления' },
   sellEnt:    { side: 'inc', group: 'inv', name: 'Продажа предприятий' },
   sellEstate: { side: 'inc', group: 'inv', name: 'Продажа недвижимости' },
   buyEnt:     { side: 'exp', group: 'inv', name: 'Покупка предприятий' },
