@@ -2,7 +2,7 @@
 import {
   GOODS, RECIPES, ENTERPRISES, BUILDINGS, UNITS, CATEGORIES, CONTRACTORS, OWN, contractorInfo, RIVALS,
   NPC_QUALITY, BUY_RATE, SELL_RATE, SHOP_TURNOVER_PER_WORKER, TRANSPORT_RATE, POP_SCALE, ADVANCE, unitOf,
-  PLOT_SIZES, plotK, isArea, HQ, HQ_MAX, hqLimit, hqUpgradeCost, specSalary, companyXpNeed, FEATURES, AUTO_SUPPLY_ENT_LEVEL,
+  PLOT_SIZES, plotK, isArea, HQ, HQ_MAX, hqLimit, hqUpgradeCost, specSalary, companyXpNeed, FEATURES, AUTO_SUPPLY_ENT_LEVEL, RING_MAX, EXPAND_AT,
 } from './data.js';
 import * as G from './game.js';
 import * as P from './production.js';
@@ -1424,6 +1424,7 @@ export class UI {
         <span>Уровень города</span><span><span class="star sm">${s.city.level || 1}</span></span>
         <span>Полиция / больницы / школы</span><span>${count('police')} / ${count('hospital')} / ${count('school')}</span></div>
       <div><p class="hint">Для каждого следующего уровня городу нужно по 2 полиции, больницы и школы. Уровень города увеличивает спрос жителей.</p>
+        <p class="hint">${(s.cityRing || 0) < RING_MAX ? `Город растёт: когда застроят ${pct(EXPAND_AT)} участков (сейчас ${pct(G.builtShare(s))}), на окраине откроется новый район — земля там дешевле.` : 'Город достиг максимального размера.'} Районов открыто: ${(s.cityRing || 0) + 1} из ${RING_MAX + 1}.</p>
         <p class="hint">Место вашей компании в рейтинге: <b>${G.rating(s).findIndex(r => r.player) + 1}</b> — <a href="#" data-act="gopage" data-k="rating">рейтинг компаний</a>.</p></div></div>`;
   }
 

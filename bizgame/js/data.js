@@ -142,6 +142,10 @@ export const hqUpgradeCost = l => 500000 * l * l;
 // Город: сетка GRID×GRID, дороги на каждой 4-й линии.
 export const GRID = 17;
 export const isRoad = (i, j) => i % 4 === 0 || j % 4 === 0;
+// Город растёт кольцами: каждое кольцо добавляет по кварталу (4 клетки) с каждой стороны.
+export const RING_MAX = 3;
+export const EXPAND_AT = 0.6; // доля застроенных участков, после которой открывается новый район
+export const cityBounds = ring => [-4 * ring, GRID - 1 + 4 * ring];
 
 export const RIVALS = [
   { name: 'ООО «Колос-Девелопмент»', color: '#e8a33d' },

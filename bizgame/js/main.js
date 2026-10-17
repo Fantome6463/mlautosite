@@ -6,7 +6,6 @@ import { UI } from './ui.js';
 import { Thumbs } from './thumbs.js';
 import { GOODS, BUILDINGS } from './data.js';
 
-const CYCLE_DAYS = 3; // полный цикл день/ночь в 3D
 const DEFAULTS = { dayLengthSeconds: 60 };
 
 const app = {
@@ -117,8 +116,6 @@ function loop(now) {
     app.acc += dt * app.speed;
     if (app.acc >= app.dayMs) { app.acc = 0; runDay(); }
   }
-  const frac = app.acc / app.dayMs;
-  world.setDayPhase((((app.state.day - 1) % CYCLE_DAYS + frac) / CYCLE_DAYS + 0.02) % 1);
   renderTop();
   if (!world.paused) ui.renderBadges();
   requestAnimationFrame(loop);

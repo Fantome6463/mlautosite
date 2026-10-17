@@ -1,15 +1,15 @@
 // 3D-мир: пустой город, стройплощадки с кранами, офисы, жилые дома, больницы, полиция.
 import * as THREE from 'three';
 import { OrbitControls } from './../vendor/OrbitControls.js';
-import { GRID, isRoad, BUILDINGS, contractorInfo, RIVALS, PLAYER_COLOR } from './data.js';
+import { GRID, isRoad, BUILDINGS, contractorInfo, RIVALS, PLAYER_COLOR, RING_MAX, cityBounds } from './data.js';
 import { shopRadius } from './production.js';
 
 const CELL = 10;
 const OFF = (GRID - 1) / 2;
-const HALF = (GRID * CELL) / 2;
 const FLOOR = 2.6;
-const ROAD_LINES = [];
-for (let k = 0; k < GRID; k++) if (k % 4 === 0) ROAD_LINES.push(k);
+// половина стороны города в метрах для кольца ring (кольцо 0 — стартовые 17×17 клеток)
+const halfOf = ring => (GRID * CELL) / 2 + ring * 4 * CELL;
+const MAX_HALF = halfOf(RING_MAX);
 
 export const toWorld = (i, j) => new THREE.Vector3((i - OFF) * CELL, 0, (j - OFF) * CELL);
 const ownerColor = b => (b.owner === 'player' ? PLAYER_COLOR : RIVALS[b.owner]?.color || '#9ca3af');
@@ -29,14 +29,41 @@ function mesh(geo, m, x = 0, y = 0, z = 0) {
 const M = c => (typeof c === 'string' ? mat(c) : c);
 const box = (w, h, d, color, x = 0, y = 0, z = 0) => mesh(new THREE.BoxGeometry(w, h, d), M(color), x, y + h / 2, z);
 const cyl = (rt, rb, h, color, x = 0, y = 0, z = 0, seg = 12) => mesh(new THREE.CylinderGeometry(rt, rb, h, seg), M(color), x, y + h / 2, z);
+const LEAF = ['#3f8f4a', '#4e9f3d', '#2f7a43', '#5aa65a', '#6aae4f', '#357f3c'];
+const PINE = ['#2d6a4f', '#28603f', '#33754a', '#1f5537'];
+// Детерминированный генератор: лес не «прыгает» при перестройке
+function rng(seed) {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6d2b79f5) >>> 0; let x = Math.imul(a ^ (a >>> 15), 1 | a); x ^= x + Math.imul(x ^ (x >>> 7), 61 | x); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
+}
+// Части дерева: ствол + 3–4 «облака» листвы или 3 яруса хвои. Возвращает [{geo:'trunk'|'blob'|'cone', x,y,z, sx,sy,sz, color}]
+function treeParts(x, z, s, kind, r) {
+  const out = [{ geo: 'trunk', x, y: 0, z, sx: s, sy: s * (kind === 'pine' ? 1.1 : 1.5), sz: s, color: '#6b4a2b' }];
+  if (kind === 'pine') {
+    const c = PINE[Math.floor(r() * PINE.length)];
+    for (let k = 0; k < 3; k++) out.push({ geo: 'cone', x, y: s * (1.75 + k * 1.1), z, sx: s * (1.7 - k * 0.42), sy: s * 2.1, sz: s * (1.7 - k * 0.42), color: c });
+  } else {
+    const c = LEAF[Math.floor(r() * LEAF.length)], c2 = LEAF[Math.floor(r() * LEAF.length)];
+    out.push({ geo: 'blob', x, y: s * 2.6, z, sx: s * 1.55, sy: s * 1.35, sz: s * 1.55, color: c });
+    for (let k = 0, n = 2 + Math.floor(r() * 2); k < n; k++) {
+      const a = r() * Math.PI * 2, d = s * 0.75;
+      out.push({ geo: 'blob', x: x + Math.cos(a) * d, y: s * (2.1 + r() * 0.9), z: z + Math.sin(a) * d, sx: s * 1.05, sy: s * 0.95, sz: s * 1.05, color: k ? c : c2 });
+    }
+  }
+  return out;
+}
+const TREE_GEO = {
+  trunk: new THREE.CylinderGeometry(0.16, 0.26, 1.5, 6).translate(0, 0.75, 0),
+  blob: new THREE.IcosahedronGeometry(1, 1),
+  cone: new THREE.ConeGeometry(1, 1, 8),
+};
 function tree(x, z, s = 1, pine = Math.random() < 0.5) {
   const g = new THREE.Group();
-  g.add(cyl(0.18 * s, 0.25 * s, 1.2 * s, '#6b4a2b', 0, 0, 0, 6));
-  const c = ['#3f8f4a', '#4e9f3d', '#2f7a43', '#5aa65a'][Math.floor(Math.random() * 4)];
-  if (pine) {
-    g.add(mesh(new THREE.ConeGeometry(1.2 * s, 2.2 * s, 7), mat(c), 0, 2 * s, 0));
-    g.add(mesh(new THREE.ConeGeometry(0.9 * s, 1.8 * s, 7), mat(c), 0, 2.9 * s, 0));
-  } else g.add(mesh(new THREE.IcosahedronGeometry(1.2 * s, 0), mat(c), 0, 2.2 * s, 0));
+  for (const p of treeParts(0, 0, s, pine ? 'pine' : 'leaf', Math.random)) {
+    const m = mesh(TREE_GEO[p.geo], mat(p.color), p.x, p.y, p.z);
+    m.scale.set(p.sx, p.sy, p.sz);
+    g.add(m);
+  }
   g.position.set(x, 0, z);
   g.rotation.y = Math.random() * Math.PI;
   return g;
@@ -385,9 +412,9 @@ export class World {
     this.onPick = onPick;
     this.tiles = new Map();   // "i,j" → mesh
     this.bObjs = new Map();   // id → group
-    this.cars = []; this.labels = [];
+    this.labels = [];
     this.clock = new THREE.Clock();
-    this.glow = 0;
+    this.ring = -1; this.treeSig = '';
     this.tex = {
       office: FACADES.office.map(f => facade(...f)),
       residential: FACADES.residential.map(f => facade(...f)),
@@ -424,12 +451,13 @@ export class World {
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     const sc = sun.shadow.camera;
-    sc.left = sc.bottom = -HALF - 20; sc.right = sc.top = HALF + 20; sc.far = 500;
+    // всегда день; солнце и тень следуют за камерой, чтобы тени хватало на любой район
+    this.sunOff = new THREE.Vector3(70, 160, 90);
+    sc.left = sc.bottom = -190; sc.right = sc.top = 190; sc.near = 1; sc.far = 420;
     sun.shadow.bias = -0.0005;
     s.add(sun, sun.target);
 
     this.buildStatic();
-    this.buildCars();
 
     this.hover = new THREE.Mesh(new THREE.BoxGeometry(CELL * 0.98, 0.15, CELL * 0.98), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.25, depthWrite: false }));
     this.hover.visible = false; s.add(this.hover);
@@ -457,50 +485,107 @@ export class World {
 
   buildStatic() {
     const s = this.scene;
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(1400, 1400), mat('#7fb069'));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600), mat('#7fb069'));
     ground.rotation.x = -Math.PI / 2; ground.position.y = -0.05; ground.receiveShadow = true;
     s.add(ground);
-    for (let k = 0; k < 260; k++) {
-      const a = Math.random() * Math.PI * 2, d = HALF + 12 + Math.random() * 160;
-      s.add(tree(Math.cos(a) * d, Math.sin(a) * d, 1.2 + Math.random() * 1.4));
-    }
-    const river = new THREE.Mesh(new THREE.PlaneGeometry(40, 1400), new THREE.MeshStandardMaterial({ color: '#3b82c4', roughness: 0.15, metalness: 0.2 }));
-    river.rotation.x = -Math.PI / 2; river.position.set(HALF + 70, 0.02, 0);
+    // река — за границей самого большого города
+    const river = new THREE.Mesh(new THREE.PlaneGeometry(40, 1600), new THREE.MeshStandardMaterial({ color: '#3b82c4', roughness: 0.15, metalness: 0.2 }));
+    river.rotation.x = -Math.PI / 2; river.position.set(MAX_HALF + 55, 0.02, 0);
     s.add(river);
+    this.riverX = MAX_HALF + 55;
+  }
 
-    const len = GRID * CELL;
+  // Дороги, разметка и фонари текущего размера города
+  buildRoads(ring) {
+    if (this.roads) this.scene.remove(this.roads);
+    const g = this.roads = new THREE.Group();
+    const [lo, hi] = cityBounds(ring), half = halfOf(ring), len = half * 2;
+    const lines = [];
+    for (let k = lo; k <= hi; k++) if (isRoad(k, 1)) lines.push(k);
     const roadMat = mat('#3a3f47', { flatShading: false });
     const dashes = [];
-    for (const k of ROAD_LINES) {
+    for (const k of lines) {
       const p = (k - OFF) * CELL;
-      const h = new THREE.Mesh(new THREE.BoxGeometry(len, 0.1, CELL), roadMat); h.position.set(0, 0.05, p); h.receiveShadow = true; s.add(h);
-      const v = new THREE.Mesh(new THREE.BoxGeometry(CELL, 0.1, len), roadMat); v.position.set(p, 0.051, 0); v.receiveShadow = true; s.add(v);
-      for (let t = -HALF + 2; t < HALF; t += 4) {
+      const h = new THREE.Mesh(new THREE.BoxGeometry(len, 0.1, CELL), roadMat); h.position.set(0, 0.05, p); h.receiveShadow = true; g.add(h);
+      const v = new THREE.Mesh(new THREE.BoxGeometry(CELL, 0.1, len), roadMat); v.position.set(p, 0.051, 0); v.receiveShadow = true; g.add(v);
+      for (let t = -half + 2; t < half; t += 4) {
         const cellIdx = Math.round(t / CELL + OFF);
-        if (cellIdx % 4 === 0 && Math.abs(t - (cellIdx - OFF) * CELL) < CELL / 2) continue;
+        if (isRoad(cellIdx, 1) && Math.abs(t - (cellIdx - OFF) * CELL) < CELL / 2) continue;
         dashes.push([t, p, true], [p, t, false]);
       }
     }
     const dm = new THREE.InstancedMesh(new THREE.BoxGeometry(1.8, 0.02, 0.25), new THREE.MeshBasicMaterial({ color: '#f5f5f4' }), dashes.length);
     const o = new THREE.Object3D();
     dashes.forEach(([x, z, horiz], n) => { o.position.set(x, 0.12, z); o.rotation.y = horiz ? 0 : Math.PI / 2; o.updateMatrix(); dm.setMatrixAt(n, o.matrix); });
-    s.add(dm);
+    g.add(dm);
     // фонари вдоль дорог
     const lampPos = [];
-    for (const k of ROAD_LINES) for (let t = -HALF + 5; t < HALF; t += 20) lampPos.push([t, (k - OFF) * CELL + 4.7]);
+    for (const k of lines) for (let t = -half + 5; t < half; t += 20) lampPos.push([t, (k - OFF) * CELL + 4.7]);
     const pole = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 5), mat('#475569'), lampPos.length);
-    this.lampMat = new THREE.MeshStandardMaterial({ color: '#fef3c7', emissive: '#fde68a', emissiveIntensity: 0 });
-    const head = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, 8, 6), this.lampMat, lampPos.length);
+    const head = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, 8, 6), mat('#fef3c7'), lampPos.length);
+    o.rotation.set(0, 0, 0);
     lampPos.forEach(([x, z], n) => {
-      o.rotation.set(0, 0, 0);
       o.position.set(x, 1.5, z); o.updateMatrix(); pole.setMatrixAt(n, o.matrix);
       o.position.set(x, 3.05, z); o.updateMatrix(); head.setMatrixAt(n, o.matrix);
     });
-    s.add(pole, head);
+    g.add(pole, head);
+    this.scene.add(g);
+    this.half = half; this.lo = lo; this.hi = hi;
+    // чем больше город, тем дальше можно отъехать камерой
+    this.controls.maxDistance = 480 + ring * 70;
+    this.scene.fog.near = 420 + ring * 60; this.scene.fog.far = 830 + ring * 110;
+  }
+
+  // Лес вокруг города (на месте будущих районов тоже) и деревья на пустых участках
+  buildTrees(state) {
+    const half = this.half, all = [];
+    const r = rng(7);
+    // лес: густые рощи с полянами — плотность задаём «шумом» из синусов
+    const dens = (x, z) => 0.55 + 0.25 * Math.sin(x * 0.021 + 1.3) * Math.cos(z * 0.017 - 0.4) + 0.2 * Math.sin((x + z) * 0.035);
+    for (let n = 0; n < 9000; n++) {
+      const x = (r() * 2 - 1) * 420, z = (r() * 2 - 1) * 420;
+      const sz = 1.1 + r() * 1.3, pine = r() < 0.45, keep = r();
+      if (Math.max(Math.abs(x), Math.abs(z)) < half + 6) continue;
+      if (Math.abs(x - this.riverX) < 28) continue;
+      const edge = Math.max(Math.abs(x), Math.abs(z)) - half; // у самой границы города лес реже
+      if (keep > dens(x, z) * Math.min(1, 0.35 + edge / 40)) continue;
+      all.push([x, z, sz, pine ? 'pine' : 'leaf', n]);
+    }
+    // на свободных участках — по 2–3 деревца, со стройкой они исчезают
+    const busy = new Set(Object.values(state.buildings).map(b => `${b.i},${b.j}`));
+    for (const p of Object.values(state.plots)) {
+      if (busy.has(`${p.i},${p.j}`)) continue;
+      const pr = rng(p.i * 977 + p.j * 131 + 5), c = toWorld(p.i, p.j);
+      for (let k = 0, m = 2 + Math.floor(pr() * 2); k < m; k++) {
+        const a = pr() * Math.PI * 2, d = 1.5 + pr() * 2.4;
+        all.push([c.x + Math.cos(a) * d, c.z + Math.sin(a) * d, 0.55 + pr() * 0.35, pr() < 0.35 ? 'pine' : 'leaf', 100000 + p.i * 1000 + p.j * 7 + k, 0.4]);
+      }
+    }
+    const parts = { trunk: [], blob: [], cone: [] };
+    for (const [x, z, s, kind, seed, y0 = 0] of all)
+      for (const p of treeParts(x, z, s, kind, rng(seed))) { p.y += y0; parts[p.geo].push(p); }
+    if (this.trees) this.scene.remove(this.trees);
+    const g = this.trees = new THREE.Group();
+    const o = new THREE.Object3D(), col = new THREE.Color();
+    for (const [geo, list] of Object.entries(parts)) {
+      if (!list.length) continue;
+      const im = new THREE.InstancedMesh(TREE_GEO[geo], new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true }), list.length);
+      list.forEach((p, n) => {
+        o.position.set(p.x, p.y, p.z); o.scale.set(p.sx, p.sy, p.sz); o.rotation.set(0, (n * 2.39) % 6.28, 0);
+        o.updateMatrix(); im.setMatrixAt(n, o.matrix); im.setColorAt(n, col.set(p.color));
+      });
+      im.castShadow = true; im.receiveShadow = geo !== 'trunk';
+      g.add(im);
+    }
+    this.scene.add(g);
   }
 
   // Участки: пустая трава, под своими зданиями — голубоватая плитка
   syncPlots(state) {
+    const ring = state.cityRing || 0;
+    if (ring !== this.ring) { this.ring = ring; this.buildRoads(ring); this.treeSig = ''; }
+    const sig = Object.keys(state.plots).length + '|' + Object.values(state.buildings).map(b => b.i * 1000 + b.j).sort().join(',');
+    if (sig !== this.treeSig) { this.treeSig = sig; this.buildTrees(state); }
     const owners = new Map();
     for (const b of Object.values(state.buildings)) owners.set(`${b.i},${b.j}`, b.owner);
     for (const p of Object.values(state.plots)) {
@@ -551,21 +636,6 @@ export class World {
     }
     for (const [id, g] of this.bObjs) if (!alive.has(id)) { this.scene.remove(g); this.bObjs.delete(id); }
     if (this.coverage) this.updateCoverage(state);
-  }
-
-  buildCars() {
-    const colors = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#e5e7eb', '#111827', '#8b5cf6', '#f97316'];
-    for (let n = 0; n < 30; n++) {
-      const g = new THREE.Group();
-      g.add(box(2, 0.7, 1, colors[n % colors.length], 0, 0.25, 0));
-      g.add(box(1.1, 0.55, 0.9, '#cbd5e1', -0.1, 0.95, 0));
-      const line = ROAD_LINES[Math.floor(Math.random() * ROAD_LINES.length)];
-      const horiz = Math.random() < 0.5, dir = Math.random() < 0.5 ? 1 : -1;
-      g.userData = { horiz, dir, lane: (line - OFF) * CELL + dir * 2.2, t: -HALF + Math.random() * HALF * 2, speed: 8 + Math.random() * 8 };
-      g.rotation.y = horiz ? (dir > 0 ? 0 : Math.PI) : (dir > 0 ? -Math.PI / 2 : Math.PI / 2);
-      this.scene.add(g);
-      this.cars.push(g);
-    }
   }
 
   floatText(i, j, text, cls = '') {
@@ -622,27 +692,6 @@ export class World {
     this.scene.add(g);
   }
 
-  // фаза суток 0..1
-  setDayPhase(t) {
-    const f = Math.min(1, Math.max(0, 0.75 + 0.7 * Math.sin(Math.PI * 2 * t)));
-    const a = Math.PI * 2 * t;
-    this.sun.position.set(Math.cos(a) * 160, 60 + Math.sin(a) * 140, 90);
-    this.sun.intensity = 0.15 + 2.3 * f;
-    this.hemi.intensity = 0.25 + 0.75 * f;
-    const day = new THREE.Color('#9fd3f0'), dusk = new THREE.Color('#f4a261'), night = new THREE.Color('#0b1730');
-    const col = f > 0.5 ? dusk.clone().lerp(day, (f - 0.5) * 2) : night.clone().lerp(dusk, f * 2);
-    this.scene.background.copy(col);
-    this.scene.fog.color.copy(col);
-    this.glow = Math.max(0, 1 - f * 1.6);
-    this.lampMat.emissiveIntensity = this.glow * 2;
-    // ночью горят окна — тем больше, чем больше жильцов и арендаторов
-    for (const g of this.bObjs.values()) {
-      if (!g.userData.wins) continue;
-      const k = g.userData.state === 'done' ? 0.15 + 0.85 * g.userData.occ : 0;
-      for (const m of g.userData.wins) m.emissiveIntensity = this.glow * 1.4 * k;
-    }
-  }
-
   bindInput() {
     const el = this.renderer.domElement;
     let down = null;
@@ -674,7 +723,7 @@ export class World {
     while (o.parent && !this.bObjs.has(o.userData.id) && !o.userData.i && o.userData.i !== 0) o = o.parent;
     const pt = o.userData.id && this.bObjs.has(o.userData.id) ? o.position : hit.point;
     const i = Math.round(pt.x / CELL + OFF), j = Math.round(pt.z / CELL + OFF);
-    if (i < 0 || j < 0 || i >= GRID || j >= GRID || isRoad(i, j)) return null;
+    if (i < this.lo || j < this.lo || i > this.hi || j > this.hi || isRoad(i, j)) return null;
     return { i, j };
   }
 
@@ -687,10 +736,11 @@ export class World {
       t.add(d); this.camera.position.add(d);
       if (d.length() < 0.01) this.camGoal = null;
     }
-    const t = this.controls.target, lim = HALF + 30;
+    const t = this.controls.target, lim = (this.half || 85) + 30;
     const cx = Math.max(-lim, Math.min(lim, t.x)) - t.x, cz = Math.max(-lim, Math.min(lim, t.z)) - t.z;
     if (cx || cz) { t.x += cx; t.z += cz; this.camera.position.x += cx; this.camera.position.z += cz; }
     this.controls.update();
+    this.sun.position.copy(t).add(this.sunOff); this.sun.target.position.copy(t);
 
     for (const g of this.bObjs.values()) {
       const u = g.userData;
@@ -702,12 +752,6 @@ export class World {
       }
       if (u.crane) u.crane.rotation.y = Math.sin(now / 2500 + u.id) * 1.4;
       if (u.blink) { const on = Math.floor(now / 350) % 2; u.blink[0].emissiveIntensity = on ? 2 : 0.1; u.blink[1].emissiveIntensity = on ? 0.1 : 2; }
-    }
-    for (const c of this.cars) {
-      const u = c.userData;
-      u.t += u.speed * u.dir * dt;
-      if (u.t > HALF) u.t = -HALF; if (u.t < -HALF) u.t = HALF;
-      if (u.horiz) c.position.set(u.t, 0.1, u.lane); else c.position.set(u.lane, 0.1, u.t);
     }
     const w = this.container.clientWidth, h = this.container.clientHeight;
     for (let n = this.labels.length - 1; n >= 0; n--) {

@@ -1,7 +1,7 @@
 // Экономическая модель: недвижимость, стройки, аренда, спрос горожан.
 // Модуль не знает ни про DOM, ни про 3D — только данные.
 import {
-  UNITS, BUILDINGS, CONTRACTORS, ADVANCE, START_MONEY, PLOT_SIZES, plotK, isArea, GRID, isRoad, RIVALS, EVENTS, TENANTS, CATEGORIES, OWN,
+  UNITS, BUILDINGS, CONTRACTORS, ADVANCE, START_MONEY, PLOT_SIZES, plotK, isArea, GRID, isRoad, RING_MAX, EXPAND_AT, cityBounds, RIVALS, EVENTS, TENANTS, CATEGORIES, OWN,
   HQ, HQ_MAX, hqLimit, hqUpgradeCost, FINANCE_PENALTY, cityLevelOf, COMPANY_MAX_LEVEL, companyXpNeed, LEVEL_BONUS,
 } from './data.js';
 import {
@@ -35,7 +35,7 @@ const occTotal = (list, t) => list.reduce((a, b) => a + (b.units[t]?.occ || 0), 
 
 export function newGame() {
   const s = {
-    version: 4, day: 1, money: START_MONEY, loan: 0, nextId: 1, debtDays: 0, bankrupt: false,
+    version: 4, day: 1, cityRing: 0, money: START_MONEY, loan: 0, nextId: 1, debtDays: 0, bankrupt: false,
     mods: {}, plots: {}, buildings: {}, history: [], news: [], quests: {},
     city: { households: 0, jobs: 0, demand: { apt: 0, office: 0, comm: 0 } },
     rivals: RIVALS.map(r => ({ ...r, cash: START_MONEY })), // конкуренты стартуют на равных с игроком
@@ -43,17 +43,7 @@ export function newGame() {
     hq: { staff: 1, manage: 1, prod: 1, build: 1, finance: 1, mining: 1 },
     accNo: 100000 + Math.floor(Math.random() * 900000), compLvl: 1, compXp: 0,
   };
-  const c = (GRID - 1) / 2;
-  for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
-    if (isRoad(i, j)) continue;
-    const central = 1 - Math.hypot(i - c, j - c) / Math.hypot(c, c); // 1 в центре, 0 в углу
-    const r = Math.random(), size = r < 0.3 ? 's' : r < 0.75 ? 'm' : 'l';
-    s.plots[key(i, j)] = {
-      i, j, size,
-      price: Math.round(((160000 + central * central * 1400000) * PLOT_SIZES[size].k) / 10000) * 10000,
-      loc: round1(0.6 + central * 1.1),
-    };
-  }
+  addPlots(s);
   initProduction(s);
   initLedger(s);
   s.specs = [];
@@ -61,6 +51,33 @@ export function newGame() {
   addNews(s, `Город только основан — участки пустые. Стартовый капитал ${fmt(START_MONEY)}.`);
   pushHistory(s);
   return s;
+}
+
+// Участки текущего кольца города. Чем дальше от центра, тем дешевле земля и хуже район.
+function addPlots(s) {
+  const c = (GRID - 1) / 2, [lo, hi] = cityBounds(s.cityRing || 0);
+  let n = 0;
+  for (let i = lo; i <= hi; i++) for (let j = lo; j <= hi; j++) {
+    if (isRoad(i, j) || s.plots[key(i, j)]) continue;
+    const central = Math.max(-0.15, 1 - Math.hypot(i - c, j - c) / Math.hypot(c, c)); // 1 в центре, 0 в углу старого города, <0 — окраина
+    const r = Math.random(), size = r < 0.3 ? 's' : r < 0.75 ? 'm' : 'l', cc = Math.max(0, central);
+    s.plots[key(i, j)] = {
+      i, j, size,
+      price: Math.round(((160000 + cc * cc * 1400000) * PLOT_SIZES[size].k * (central < 0 ? 0.8 : 1)) / 10000) * 10000,
+      loc: round1(0.6 + central * 1.1),
+    };
+    n++;
+  }
+  return n;
+}
+export const builtShare = s => Object.keys(s.buildings).length / Math.max(1, Object.keys(s.plots).length);
+// Когда участков почти не осталось, город прирастает новым районом по краю
+function expandCity(s) {
+  if ((s.cityRing || 0) >= RING_MAX || builtShare(s) < EXPAND_AT) return false;
+  s.cityRing = (s.cityRing || 0) + 1;
+  const n = addPlots(s);
+  addNews(s, `🏗 Город растёт: на окраине открыт новый район — ${n} участков, земля там дешевле.`);
+  return true;
 }
 
 export function save(s) {
@@ -74,6 +91,7 @@ export function load() {
     if (!s || s.version !== 4) return null;
     s.hq ||= { staff: 1, manage: 1, prod: 1, build: 1 };
     s.cityName ||= 'Новоград';
+    s.cityRing ??= 0;
     s.accNo ||= 100000 + Math.floor(Math.random() * 900000);
     s.hq.finance ||= 1; s.hq.mining ||= 1;
     // раньше уровень компании считался по капиталу — переносим его как стартовый
@@ -389,6 +407,7 @@ export function tick(s) {
     fx.push({ type: 'event' });
   }
   rivalsBuild(s);
+  if (expandCity(s)) fx.push({ type: 'expand' });
 
   // 7. Неделя: налог на прибыль и предел финансового отдела (вики «Налоги», «Штаб-квартира»)
   if (s.day % 7 === 0) weekly(s);
