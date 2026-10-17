@@ -38,7 +38,7 @@ export function newGame() {
     version: 4, day: 1, money: START_MONEY, loan: 0, nextId: 1, debtDays: 0, bankrupt: false,
     mods: {}, plots: {}, buildings: {}, history: [], news: [], quests: {},
     city: { households: 0, jobs: 0, demand: { apt: 0, office: 0, comm: 0 } },
-    rivals: RIVALS.map(r => ({ ...r, worth: 5000000 + Math.random() * 3000000 })),
+    rivals: RIVALS.map(r => ({ ...r, cash: START_MONEY })), // конкуренты стартуют на равных с игроком
     company: 'Моя компания', cityName: 'Новоград',
     hq: { staff: 1, manage: 1, prod: 1, build: 1, finance: 1, mining: 1 },
     accNo: 100000 + Math.floor(Math.random() * 900000), compLvl: 1, compXp: 0,
@@ -79,6 +79,7 @@ export function load() {
     // раньше уровень компании считался по капиталу — переносим его как стартовый
     initLedger(s);
     s.specs ||= []; s.candidates ||= [];
+    for (const r of s.rivals) { r.cash ??= START_MONEY; delete r.worth; }
     migrateEnterprises(s);
     return s;
   } catch { return null; }
@@ -259,8 +260,14 @@ export function netWorth(s) {
   return Math.round(w);
 }
 
+// Капитал конкурента: деньги + его здания (готовые — по рыночной цене, стройки — по вложениям)
+export function rivalWorth(s, n) {
+  let w = s.rivals[n].cash;
+  for (const b of Object.values(s.buildings)) if (b.owner === n) w += b.state === 'done' ? marketValue(b) : b.land + b.cost;
+  return Math.round(w);
+}
 export function rating(s) {
-  const list = s.rivals.map((r, n) => ({ name: r.name, color: r.color, worth: Math.round(r.worth), player: false, count: rivalCount(s, n) }));
+  const list = s.rivals.map((r, n) => ({ name: r.name, color: r.color, worth: rivalWorth(s, n), player: false, count: rivalCount(s, n) }));
   list.push({ name: s.company, color: '#3b82f6', worth: netWorth(s), player: true, count: mine(s).length });
   return list.sort((a, b) => b.worth - a.worth);
 }
@@ -358,7 +365,7 @@ export function tick(s) {
       if (b.hist.length > 60) b.hist.shift();
       if (income > 0) fx.push({ type: 'money', id: b.id, amount: income - expense });
     } else {
-      s.rivals[b.owner].worth += (income - expense) * 0.6;
+      s.rivals[b.owner].cash += income - expense;
     }
   }
   for (const b of all) if (b.state === 'build') b.last = { income: 0, expense: 0 };
@@ -381,7 +388,6 @@ export function tick(s) {
     } else addNews(s, `📰 ${goodsEvent(s, e)}`);
     fx.push({ type: 'event' });
   }
-  for (const r of s.rivals) r.worth *= 1.002 + Math.random() * 0.004;
   rivalsBuild(s);
 
   // 7. Неделя: налог на прибыль и предел финансового отдела (вики «Налоги», «Штаб-квартира»)
@@ -448,8 +454,14 @@ function rivalsBuild(s) {
   const weights = free.map(p => p.loc * p.loc);
   let r = Math.random() * weights.reduce((a, v) => a + v, 0), p = free[0];
   for (let n = 0; n < free.length; n++) { r -= weights[n]; if (r <= 0) { p = free[n]; break; } }
-  const floors = pick(BUILDINGS[type].floors);
-  order(s, type, floors, pick(Object.keys(CONTRACTORS)), p.i, p.j, Math.floor(Math.random() * s.rivals.length));
+  const floors = pick(BUILDINGS[type].floors), contractor = pick(Object.keys(CONTRACTORS));
+  // строит тот конкурент, кому хватает денег на землю и стройку — как и игроку
+  const cost = p.price + quote(s, type, floors, contractor, BUILDINGS[type].category === 'social' ? 1 : plotK(p)).cost;
+  const able = s.rivals.map((r, n) => n).filter(n => s.rivals[n].cash >= cost);
+  if (!able.length) return;
+  const n = pick(able);
+  s.rivals[n].cash -= cost;
+  order(s, type, floors, contractor, p.i, p.j, n);
 }
 
 function finishIfDone(s, b, fx) {

@@ -141,6 +141,8 @@ function retargetSupplier(s, from, to) {
     if (!sp.srcs.length) delete x.supply[g];
   }
 }
+// Сколько товара g ждут от предприятия e свои получатели на следующий день (резерв перед автопродажей)
+export const reservedFor = (s, e, g) => Object.values(s.enterprises).reduce((a, x) => a + (x.supply?.[g]?.srcs.includes(e.id) ? x.supply[g].qty : 0), 0);
 // Кому предприятие поставляет (по снабжению получателей)
 export const consumersOf = (s, e) => Object.values(s.enterprises).flatMap(x => Object.entries(x.supply || {}).filter(([, v]) => v.srcs.includes(e.id)).map(([g, v]) => ({ to: x, g, qty: v.qty })));
 
@@ -534,7 +536,7 @@ const weekOf = s => Math.floor(s.day / 7);
 const frac = (...k) => (hash(k.join(':'), 3) % 1000) / 1000;
 // Ставки конкурентов на ваше предприятие (меняются раз в неделю)
 export const bidsFor = (s, e) => RIVALS.map((r, i) => ({ i, name: r.name, price: Math.round(entValue(s, e) * (0.72 + 0.23 * frac(e.id, i, weekOf(s))) / 10000) * 10000 }))
-  .filter(b => b.price > 0 && s.rivals[b.i].worth > b.price).sort((a, b) => b.price - a.price);
+  .filter(b => b.price > 0 && s.rivals[b.i].cash > b.price).sort((a, b) => b.price - a.price);
 function logDeal(s, text) { (s.entMarket.log ||= []).unshift({ day: s.day, text }); s.entMarket.log.length = Math.min(40, s.entMarket.log.length); }
 // Продать предприятие конкуренту
 export function sellEnterprise(s, id, rival, price) {
@@ -542,7 +544,7 @@ export function sellEnterprise(s, id, rival, price) {
   if (!e) return { error: 'Предприятие не найдено' };
   const r = s.rivals[rival];
   ledgerPay(s, price, 'sellEnt', { party: r.name, from: e.name, type: 'Продажа предприятия на бирже' });
-  r.worth -= price * 0.3;
+  r.cash -= price;
   logDeal(s, `Вы продали «${e.name}» компании ${r.name} за ${price.toLocaleString('ru-RU')} ₽`);
   dropEnterprise(s, id);
   return { ok: true, price };
@@ -602,7 +604,7 @@ export function buyListing(s, lid) {
   if (new Set(fresh).size + products(s).size > hqLimit(s, 'prod')) return { error: `Производственный отдел: не больше ${hqLimit(s, 'prod')} разных продуктов` };
   if (s.money < x.price) return { error: `Нужно ${x.price.toLocaleString('ru-RU')} ₽` };
   ledgerPay(s, -x.price, 'buyEnt', { party: RIVALS[x.seller].name, from: e.name, type: 'Покупка предприятия на бирже' });
-  s.rivals[x.seller].worth += x.price * 0.3;
+  s.rivals[x.seller].cash += x.price;
   e.id = s.nextId++; e.built = s.day;
   for (const d of e.divs) d.id = s.nextId++;
   s.enterprises[e.id] = e;
@@ -838,15 +840,15 @@ export function productionTick(s, { spend, earn, fx, news }) {
       else if (GOODS[g].kind === 'dish') { e.stock[g].qty = Math.floor(e.stock[g].qty / 2); if (!e.stock[g].qty) delete e.stock[g]; }
     }
     const rent = hostRent(s, e);
-    if (rent) { pay(e, rent, 'shopRent', s.rivals[host.owner].name); s.rivals[host.owner].worth += rent; }
+    if (rent) { pay(e, rent, 'shopRent', s.rivals[host.owner].name); s.rivals[host.owner].cash += rent; }
     shopRevenue += e.last.revenue;
     if (e.last.revenue > 0) fx.push({ type: 'money', i: host.i, j: host.j, amount: e.last.revenue });
   }
   s.lastShopRevenue = shopRevenue;
-  // автопродажа на склады города
+  // автопродажа на склады города — только излишек: сначала оставляем товар под завтрашние заказы своих получателей
   for (const e of list) for (const g in e.autoSell) {
     if (!e.autoSell[g] || !inDepot(g)) continue;
-    const qty = stockQty(e, g);
+    const qty = Math.floor(stockQty(e, g) - reservedFor(s, e, g));
     if (qty <= 0) continue;
     const v = Math.round(qty * sellPrice(s, g, e.stock[g].q));
     takeStock(e, g, qty);
