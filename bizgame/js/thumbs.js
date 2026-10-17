@@ -16,6 +16,12 @@ const texFor = type => (TEX[type] ||= {
 }[{ mixed: 'residential', mall: 'office' }[type] || type]?.() || facade('#e5e7eb', ['#94a3b8'], ['#fff'], null));
 
 const ground = (w = 9, d = 9, c = '#a3c585') => box(w, 0.4, d, c, 0, -0.4, 0);
+// Полуцилиндр-свод вдоль оси X (крыша ангара, теплица): верхняя половина, основание на высоте y
+const vault = (len, r, m, x, y, z) => {
+  const geo = new THREE.CylinderGeometry(r, r, len, 18, 1, false, 0, Math.PI);
+  geo.rotateZ(Math.PI / 2);
+  return mesh(geo, m, x, y, z);
+};
 const roofGable = (w, d, h, color, x = 0, y = 0, z = 0) => hipRoof(w, d, h, color, x, y, z);
 
 // Модели предприятий: по виду, с акцентным цветом вида
@@ -24,10 +30,10 @@ const ENT_MODELS = {
     const g = new THREE.Group();
     g.add(ground(9, 9, '#cbd5e1'));
     g.add(box(7, 3.6, 5, '#f8fafc', 0, 0, -0.5));
-    g.add(box(6, 2.2, 0.15, mat('#7dd3fc', { metalness: 0.3, roughness: 0.15 }), 0, 0.3, 2.05));
-    const aw = box(7.4, 0.2, 1.6, c, 0, 2.8, 2.6); aw.rotation.x = 0.35; g.add(aw);
-    g.add(box(4, 0.9, 0.2, signMat(c), 0, 3.7, 2));
-    g.add(box(7.2, 0.3, 5.2, c, 0, 3.6, -0.5));
+    g.add(box(6, 2.1, 0.15, mat('#7dd3fc', { metalness: 0.3, roughness: 0.15 }), 0, 0.2, 2.03));
+    const aw = box(6.6, 0.12, 1.2, c, 0, 2.45, 2.5); aw.rotation.x = 0.3; g.add(aw);
+    g.add(box(4, 0.7, 0.15, signMat(c), 0, 2.9, 2.05));
+    g.add(box(7.2, 0.3, 5.2, '#64748b', 0, 3.6, -0.5), box(7.2, 0.12, 5.2, c, 0, 3.6, -0.5));
     g.add(box(1, 0.8, 0.8, '#f59e0b', -2.6, 0, 3.4), box(1, 0.8, 0.8, '#22c55e', -1.4, 0, 3.6));
     return g;
   },
@@ -35,8 +41,7 @@ const ENT_MODELS = {
     const g = new THREE.Group();
     g.add(ground(10, 9, '#cbd5e1'));
     g.add(box(8, 3.4, 6, '#d6d3d1', 0, 0, -0.8));
-    const r = mesh(new THREE.CylinderGeometry(3.05, 3.05, 8, 16, 1, false, 0, Math.PI), mat(c), 0, 3.4, -0.8);
-    r.rotation.z = Math.PI / 2; r.rotation.y = Math.PI / 2; r.scale.set(1, 1, 0.45); g.add(r);
+    const r = vault(8.2, 3.05, mat(c), 0, 3.4, -0.8); r.scale.set(1, 0.5, 1); g.add(r);
     for (const x of [-2.4, 0, 2.4]) g.add(box(1.8, 2.4, 0.1, '#78716c', x, 0, 2.25));
     for (let k = 0; k < 4; k++) g.add(box(0.9, 0.9, 0.9, '#b45309', -3.5 + (k % 2) * 1, Math.floor(k / 2) * 0.9, 3.4));
     g.add(box(1.2, 1, 0.8, '#f59e0b', 2.8, 0, 3.4), box(0.1, 1.8, 0.6, '#334155', 3.5, 0, 3.4));
@@ -46,7 +51,12 @@ const ENT_MODELS = {
     const g = new THREE.Group();
     g.add(ground(10, 9, '#cbd5e1'));
     g.add(box(8, 3.2, 5.5, '#e5e7eb', -0.5, 0, 0));
-    for (let k = 0; k < 4; k++) { const t = box(2, 1.4, 5.5, k % 2 ? '#94a3b8' : c, -3.5 + k * 2, 3.2, 0); t.rotation.z = -0.5; g.add(t); }
+    // зубчатая (шедовая) крыша: наклонные скаты и вертикальное остекление
+    for (let k = 0; k < 4; k++) {
+      const x0 = -4.5 + k * 2;
+      const sl = box(2.25, 0.14, 5.5, k % 2 ? '#94a3b8' : c, x0 + 1, 3.2, 0); sl.rotation.z = 0.45; sl.position.y = 3.2 + 0.5; g.add(sl);
+      g.add(box(0.12, 1, 5.4, mat('#bae6fd', { metalness: 0.3, roughness: 0.2 }), x0 + 2, 3.2, 0));
+    }
     g.add(cyl(0.55, 0.7, 7.5, '#9ca3af', 3.4, 0, -1.6), cyl(0.45, 0.6, 6, '#9ca3af', 3.4, 0, 1.4));
     g.add(box(1.2, 0.4, 1.2, '#ef4444', 3.4, 7.3, -1.6));
     const smoke = mat('#e5e7eb', { transparent: true, opacity: 0.8 });
@@ -87,10 +97,11 @@ const ENT_MODELS = {
     const g = new THREE.Group();
     g.add(ground(10, 9));
     const glass = mat('#bae6fd', { transparent: true, opacity: 0.55, roughness: 0.1, metalness: 0.2 });
-    for (const z of [-2.2, 1.4]) {
-      const h = mesh(new THREE.CylinderGeometry(1.6, 1.6, 8, 14, 1, false, 0, Math.PI), glass, 0, 0.3, z);
-      h.rotation.z = Math.PI / 2; h.rotation.y = Math.PI / 2; g.add(h);
-      for (let k = 0; k < 6; k++) g.add(box(1.1, 0.5, 0.8, '#16a34a', -3.2 + k * 1.3, 0, z));
+    for (const z of [-2.1, 1.6]) {
+      g.add(box(8, 0.4, 3.4, '#e5e7eb', 0, 0, z));
+      g.add(vault(8, 1.7, glass, 0, 0.4, z));
+      for (let k = 0; k < 6; k++) g.add(box(1, 0.45, 0.7, '#16a34a', -3.2 + k * 1.3, 0.4, z));
+      for (let k = 0; k < 5; k++) g.add(mesh(new THREE.TorusGeometry(1.7, 0.05, 4, 12, Math.PI), mat('#94a3b8'), -3.8 + k * 1.9, 0.4, z).rotateY(Math.PI / 2));
     }
     return g;
   },
@@ -229,7 +240,9 @@ export class Thumbs {
     this.holder.clear(); this.holder.add(g);
     g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     const bb = new THREE.Box3().setFromObject(g), size = bb.getSize(new THREE.Vector3()), c = bb.getCenter(new THREE.Vector3());
-    const half = Math.max(Math.max(size.x, size.z) * 0.62, size.y * 0.6, (Math.max(size.x, size.z) * 0.5 + size.y * 0.25));
+    // габарит в изометрии: ширина — диагональ основания, высота — здание плюс проекция основания
+    const diag = (size.x + size.z) * 0.707;
+    const half = Math.max(diag * 0.55, (size.y * 0.87 + diag * 0.5) * 0.55);
     const cam = new THREE.OrthographicCamera(-half, half, half, -half, 0.1, 200);
     cam.position.set(c.x + 22, c.y + 18, c.z + 22); cam.lookAt(c);
     this.r.render(this.scene, cam);

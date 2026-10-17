@@ -86,7 +86,12 @@ export class UI {
     this.winTab = 'goods';
     this.lastNews = null;
 
-    for (const el of [$('#side'), $('#pageBody')]) {
+    const modal = document.createElement('div');
+    modal.id = 'modal'; modal.hidden = true;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) { this.dlg = null; this.renderDialog(); } });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && this.dlg) { this.dlg = null; this.renderDialog(); } });
+    for (const el of [$('#side'), $('#pageBody'), modal]) {
       el.addEventListener('click', e => this.onClick(e));
       el.addEventListener('change', e => this.onChange(e));
     }
@@ -475,36 +480,77 @@ export class UI {
       <p class="hint">Подразделений: ${e.divs.length}, свободных уровней: ${P.freeLevels(e)}. Новые подразделения — на вкладке «Подразделения». Технологии повышает лаборатория.</p>`;
   }
 
-  // Снабжение: для каждого товара — поставщик (склады города, конкуренты, свои предприятия) и объём в день
+  // Снабжение: все товары предприятия сразу; у каждого — очередь поставщиков («+» — запасной, «Заменить» — другой)
+  supplyGoods(e, s) {
+    const d = entDef(e), need = P.inputNeeds(s, e);
+    const base = d.goods ? P.availableGoods(e) : Object.keys(need);
+    return [...new Set([...base, ...Object.keys(e.supply)])].filter(g => GOODS[g] && accepts(e, g));
+  }
+  // Сколько заказывать по умолчанию: потребность цеха или ожидаемые продажи магазина
+  defaultQty(e, s, g) {
+    const need = P.inputNeeds(s, e)[g];
+    if (need) return Math.ceil(need);
+    const d = entDef(e), sold = (P.entFlow(e)[g]?.sold || 0) / 7;
+    if (sold) return Math.ceil(sold * 1.2);
+    return Math.max(1, Math.round(((GOODS[g].demand || 0.05) / 100) * Math.max(30, e.area?.pop || 60) * POP_SCALE * (d.reach || 1) * 0.5));
+  }
   ep_supply(e, s) {
     const d = entDef(e), need = P.inputNeeds(s, e), fl = P.entFlow(e);
-    const shopNeed = d.sells ? Object.fromEntries(Object.entries(fl).map(([g, x]) => [g, (x.sold || 0) / 7])) : {};
-    const goods = [...new Set([...Object.keys(need), ...Object.keys(e.supply), ...Object.keys(shopNeed)])].filter(g => GOODS[g]);
+    const goods = this.supplyGoods(e, s);
+    const typeOf = o => (o.own ? 'своё' : o.src === 'depot' ? 'склад' : 'конкурент');
     let total = 0;
     const rows = goods.map(g => {
       const sp = e.supply[g], st = e.stock[g], list = P.offers(s, g, e);
-      const cur = sp ? list.find(o => String(o.src) === String(sp.src)) : null;
-      const sum = sp && cur ? sp.qty * cur.price : 0;
+      const srcs = sp?.srcs || [];
+      const first = srcs.length ? list.find(o => String(o.src) === String(srcs[0])) : null;
+      const sum = sp && first ? sp.qty * first.price : 0;
       total += sum;
-      const sel = `<select data-act="supsrc" data-good="${g}">${sp ? '' : '<option value="">— выберите поставщика —</option>'}${list.map(o => `<option value="${o.src}" ${sp && String(sp.src) === String(o.src) ? 'selected' : ''}>${esc(o.name)}${o.own ? ' (своё)' : ''} — ${fmt(o.price)}, кач. ${o.q ? o.q.toFixed(1) : '—'}, есть ${qty(o.avail)}</option>`).join('')}${!list.length ? '<option value="">нигде не продаётся — производите сами</option>' : ''}</select>`;
-      return `<tr><td>${gn(g)}</td><td class="r">${qu(need[g] || shopNeed[g] || 0, g)}</td><td class="r">${qu(st?.qty || 0, g)}${st ? ` <span class="hint">кач. ${st.q.toFixed(1)}</span>` : ''}</td>
-        <td>${sel}</td><td><input type="number" min="0" value="${Math.round(sp?.qty || 0)}" data-act="supqty" data-good="${g}" ${!sp || (e.autoSupply?.on && need[g]) ? 'disabled' : ''} style="width:100px"></td>
-        <td class="r">${cur ? fmt(cur.price) : '—'}</td><td class="r">${sum ? fmt(sum) : '—'}</td>
-        <td>${sp ? `<button class="btn small" data-act="supdel" data-good="${g}" title="Не закупать">${ic('x')}</button>` : ''}</td></tr>`;
+      const chips = srcs.map((src, i) => {
+        const o = list.find(x => String(x.src) === String(src));
+        return `<div class="supchip">${srcs.length > 1 ? `<b class="ord">${i + 1}</b>` : ''}<span class="nm2">${esc(o?.name || srcName(s, src))}</span>
+          <span class="hint">${o ? `${typeOf(o)} · ${fmt(o.price)} · кач. ${o.q ? o.q.toFixed(1) : '—'} · есть ${qty(o.avail)}` : 'нет в продаже'}</span>
+          <button class="btn small" data-act="supdlg" data-mode="replace" data-good="${g}" data-idx="${i}" title="Заменить поставщика">Заменить</button>
+          <button class="btn icon xs" data-act="supx" data-good="${g}" data-idx="${i}" title="Убрать поставщика">${ic('x')}</button></div>`;
+      }).join('');
+      const sold = (fl[g]?.sold || 0) / 7;
+      return `<tr><td>${gn(g)}</td><td class="r">${qu(need[g] || sold || 0, g)}</td><td class="r">${qu(st?.qty || 0, g)}${st ? ` <span class="hint">кач. ${st.q.toFixed(1)}</span>` : ''}</td>
+        <td class="supcell">${chips || (list.length ? '' : '<span class="hint">нигде не продаётся — производите сами</span>')}
+          ${list.length ? (srcs.length ? `<button class="btn small" data-act="supdlg" data-mode="add" data-good="${g}" title="Добавить запасного поставщика — если у первого раскупят">${ic('plus')} поставщик</button>`
+            : `<button class="btn small primary" data-act="supdlg" data-mode="add" data-good="${g}">Выбрать поставщика</button>`) : ''}</td>
+        <td><input type="number" min="0" value="${Math.round(sp?.qty || 0)}" data-act="supqty" data-good="${g}" ${!sp || (e.autoSupply?.on && need[g]) ? 'disabled' : ''} style="width:100px"></td>
+        <td class="r">${sum ? fmt(sum) : '—'}</td></tr>`;
     }).join('');
-    // что ещё можно завозить: сырьё для любых продуктов предприятия, товары магазина, товары складской группы
-    const inputs = new Set(recipesFor(e.type, e.sub).flatMap(r => Object.keys(RECIPES[r].inputs)));
-    const can = Object.keys(GOODS).filter(g => !goods.includes(g) && accepts(e, g) && (d.goods ? d.goods.includes(g) : e.type === 'warehouse' || e.type === 'construction' || inputs.has(g)) && (P.inDepot(g) || P.offers(s, g, e).length));
-    return `<table class="grid"><tr><th>Продукт</th><th class="r">Нужно в день</th><th class="r">На складе</th><th>Поставщик</th><th>Заказ в день</th><th class="r">Цена</th><th class="r">Сумма в день</th><th></th></tr>
-      ${rows || '<tr><td colspan="8" class="hint">Сырьё не требуется. Добавьте закупку ниже.</td></tr>'}
-      <tr><td colspan="6" class="r"><b>Итого закупок в день:</b></td><td class="r"><b>${fmt(total)}</b></td><td></td></tr></table>
+    const can = (e.type === 'warehouse' || e.type === 'construction') ? Object.keys(GOODS).filter(g => !goods.includes(g) && accepts(e, g) && P.offers(s, g, e).length) : [];
+    return `<table class="grid"><tr><th>Товар</th><th class="r">${d.sells ? 'Продажи в день' : 'Нужно в день'}</th><th class="r">На складе</th><th>Поставщики</th><th>Заказ в день</th><th class="r">Сумма в день</th></tr>
+      ${rows || '<tr><td colspan="6" class="hint">Сырьё не требуется.</td></tr>'}
+      <tr><td colspan="5" class="r"><b>Итого закупок в день:</b></td><td class="r"><b>${fmt(total)}</b></td></tr></table>
       ${can.length ? `<div class="row"><select id="supGood">${can.map(g => `<option value="${g}">${goodName(g)} — ${fmt(P.buyPrice(s, g))} за ${unitOf(g)}</option>`).join('')}</select>
         <button class="btn small primary" data-act="supadd">${ic('plus')} Добавить товар</button></div>` : ''}
       ${Object.keys(need).length ? (P.canAutoSupply(s, e) ? `<label class="row"><input type="checkbox" data-act="autosupply" ${e.autoSupply?.on ? 'checked' : ''}> Авторегулирование снабжения — запас на
         <input type="range" min="1" max="5" value="${e.autoSupply?.weeks || 1}" data-act="autodays" style="max-width:140px"> <b>${e.autoSupply?.weeks || 1} нед.</b></label>`
         : `<p class="hint">${ic('lock')} Авторегулирование снабжения — с ${FEATURES.autoSupply}-го уровня компании для предприятий ${AUTO_SUPPLY_ENT_LEVEL}-го уровня и выше.</p>`) : ''}
-      <p class="hint">Поставщики: склады города (качество ${2.5}, запас ограничен), компании-конкуренты (у каждой своя цена и качество — лучше качество, дороже) и ваши предприятия
-        (по себестоимости + доставка ${Math.round(TRANSPORT_RATE * 100)}% цены). Качество сырья влияет на качество продукции.</p>`;
+      <p class="hint">Заказ в день набирается у поставщиков по очереди: если у первого товар раскупили, недостающее берут у второго и дальше. Поставщики — склады города
+        (запас ограничен), компании-конкуренты (своя цена и качество) и ваши предприятия (по себестоимости + доставка ${Math.round(TRANSPORT_RATE * 100)}% цены). Качество сырья влияет на качество продукции.</p>`;
+  }
+
+  // Окно выбора поставщика: список с сортировкой по цене, качеству, наличию
+  renderDialog() {
+    const m = $('#modal'), dl = this.dlg, e = dl && this.s.enterprises[dl.ent];
+    if (!dl || !e) { m.hidden = true; m.innerHTML = ''; return; }
+    const s = this.s, g = dl.g, cur = e.supply[g]?.srcs || [];
+    const list = P.offers(s, g, e).slice();
+    const key = { price: o => o.price, q: o => -o.q, avail: o => -o.avail }[dl.sort];
+    list.sort((a, b) => key(a) - key(b));
+    const typeOf = o => (o.own ? '<span class="tag own">ваше</span>' : o.src === 'depot' ? '<span class="tag">склад города</span>' : '<span class="tag rival">конкурент</span>');
+    m.hidden = false;
+    m.innerHTML = `<div class="dlg" role="dialog"><div class="dlg-h"><h3>${dl.mode === 'replace' ? 'Заменить поставщика' : 'Добавить поставщика'}: ${gn(g)}</h3>
+        <button class="btn icon" data-act="dlgclose" title="Закрыть">${ic('x')}</button></div>
+      <div class="seg"><span class="hint">Сортировка:</span>${[['price', 'по цене'], ['q', 'по качеству'], ['avail', 'по наличию']].map(([k, n]) => `<button class="${dl.sort === k ? 'on' : ''}" data-act="dlgsort" data-k="${k}">${n}</button>`).join('')}</div>
+      <div class="dlg-b"><table class="grid"><tr><th>Поставщик</th><th class="r">Цена за ${unitOf(g)}</th><th class="r">Качество</th><th class="r">В наличии</th><th></th></tr>
+        ${list.map(o => { const chosen = cur.some(x => String(x) === String(o.src));
+          return `<tr class="${chosen ? 'me' : ''}"><td>${esc(o.name)} ${typeOf(o)}</td><td class="r">${fmt(o.price)}</td><td class="r">${o.q ? qBadge(o.q) : '—'}</td><td class="r ${o.avail <= 0 ? 'neg' : ''}">${qty(o.avail)}</td>
+            <td class="r">${chosen ? '<span class="hint">выбран</span>' : `<button class="btn small primary" data-act="dlgpick" data-src="${o.src}">Выбрать</button>`}</td></tr>`; }).join('') || '<tr><td colspan="5" class="hint">Никто не продаёт этот товар</td></tr>'}</table></div>
+      <p class="hint">Склады города — среднее качество, запас ограничен. У конкурентов лучше качество стоит дороже. Свои предприятия отдают по себестоимости.</p></div>`;
   }
 
   ep_sales(e, s) {
@@ -789,17 +835,27 @@ export class UI {
       }
       case 'supadd': {
         const g = $('#supGood')?.value;
-        if (g) run(() => P.setSupply(s, e, g, null, Math.ceil(P.inputNeeds(s, e)[g] || 0)));
+        if (g) run(() => P.setSupply(s, e, g, null, this.defaultQty(e, s, g)));
         this.renderPage(); break;
       }
       case 'supdel': this.app.act(() => P.removeSupply(s, e, t.dataset.good)); this.renderPage(); break;
+      case 'supx': this.app.act(() => P.removeSupplier(s, e, t.dataset.good, +t.dataset.idx)); this.renderPage(); break;
+      case 'supdlg': this.dlg = { ent: e.id, g: t.dataset.good, mode: t.dataset.mode, idx: +t.dataset.idx || 0, sort: this.dlgSort || 'price' }; this.renderDialog(); break;
+      case 'dlgsort': this.dlg.sort = this.dlgSort = t.dataset.k; this.renderDialog(); break;
+      case 'dlgclose': this.dlg = null; this.renderDialog(); break;
+      case 'dlgpick': {
+        const dl = this.dlg, x = s.enterprises[dl.ent], g = dl.g;
+        const r = run(() => (dl.mode === 'replace' ? P.replaceSupplier(s, x, g, dl.idx, t.dataset.src) : P.addSupplier(s, x, g, t.dataset.src, x.supply[g]?.qty ?? this.defaultQty(x, s, g))));
+        if (r?.ok) { this.dlg = null; this.renderDialog(); this.renderPage(); }
+        break;
+      }
       case 'cadd': {
         const to = s.enterprises[+$('#cTo').value];
         const r = run(() => P.setSupply(s, to, $('#cGood').value, e.id, +$('#cQty').value));
         if (r?.ok) this.toast(`Отгрузка в «${to.name}» настроена`);
         this.renderPage(); break;
       }
-      case 'consdel': this.app.act(() => P.removeSupply(s, s.enterprises[+t.dataset.to], t.dataset.good)); this.renderPage(); break;
+      case 'consdel': { const to = s.enterprises[+t.dataset.to], g = t.dataset.good; this.app.act(() => P.removeSupplier(s, to, g, to.supply[g].srcs.indexOf(e.id))); this.renderPage(); break; }
       case 'wtab': this.winTab = t.dataset.tab; this.renderPage(); break;
       case 'extab': this.exTab = t.dataset.k; this.renderPage(); break;
       case 'exbuy': {
@@ -863,10 +919,6 @@ export class UI {
         case 'ename': if (t.value.trim()) e.name = t.value.trim().slice(0, 40); break;
         case 'autosell': e.autoSell[t.dataset.good] = t.checked; break;
         case 'supqty': if (e.supply[t.dataset.good]) e.supply[t.dataset.good].qty = Math.max(0, +t.value || 0); break;
-        case 'supsrc': if (t.value !== '') {
-          const g = t.dataset.good, r = P.setSupply(this.s, e, g, t.value, e.supply[g] ? undefined : Math.ceil(P.inputNeeds(this.s, e)[g] || 0));
-          if (r.error) this.toast(r.error, true);
-        } break;
         case 'price': e.prices[t.dataset.good] = Math.max(1, Math.round(+t.value || 1)); break;
         case 'research': e.research = t.value || null; e.progress = 0; break;
       }
@@ -1053,7 +1105,7 @@ export class UI {
       rows.push({ key: 'e:' + e.type + ':' + e.sub, icon: eTile(e, 'sm'), kind: d.name, name: esc(e.name), link: `data-act="openent" data-id="${e.id}"`,
         level: e.lvl || 1, free: P.freeLevels(e), eff: Math.min(1, (P.workersOf(e) / Math.max(1, P.maxWorkers(e))) * P.salaryEff(this.s, e) * P.specBonus(this.s, e)),
         products: goods.map(g => `<span class="ge" title="${GOODS[g].name}">${GOODS[g].icon}</span>`).join(''), rev: w.rev, exp: w.exp,
-        assets: Math.round(e.invested * 0.6 + stock), problem: this.entProblem(e), contracts: P.consumersOf(s, e).length > 0 || Object.values(e.supply || {}).some(v => typeof v.src === 'number') });
+        assets: Math.round(e.invested * 0.6 + stock), problem: this.entProblem(e), contracts: P.consumersOf(s, e).length > 0 || Object.values(e.supply || {}).some(v => v.srcs?.some(x => typeof x === 'number')) });
     }
     return rows;
   }
@@ -1587,8 +1639,10 @@ export class UI {
       <h3>Производство и цепочки</h3><p>Фермы, шахты, заводы, склады и лаборатории — виртуальные предприятия, они не занимают места в городе. Цепочки как в жизни:
       нефть → химзавод → солярка, удобрения, взрывчатка, пластик, резина; удобрения и солярка → поле → зерно, свёкла, сено; зерно → пищевой завод → мука, комбикорм;
       сено, комбикорм и ветпрепараты → коровник, курятник, свинарник → молоко, яйца, мясо; руда и уголь → металлургия → сталь → машиностроение → двигатели, станки, тракторы, горное оборудование.</p>
-      <h3>Снабжение и поставщики</h3><p>На вкладке «Снабжение» предприятия для каждого товара выберите поставщика и объём в день: склады города, компании-конкуренты
-      (у каждой своя цена и качество) или ваше собственное предприятие — тогда товар идёт по себестоимости, плюс 1% за доставку. Отгрузку можно настроить и со стороны поставщика — на вкладке «Сбыт».</p>
+      <h3>Снабжение и поставщики</h3><p>На вкладке «Снабжение» сразу видны все товары предприятия: сырьё для цехов или ассортимент магазина. У каждого товара —
+      заказ в день и очередь поставщиков. «Выбрать поставщика» и «+ поставщик» открывают окно со списком (сортировка по цене, качеству, наличию):
+      склады города, компании-конкуренты и ваши предприятия. Если у первого поставщика товар раскупили, недостающее берётся у второго и дальше.
+      «Заменить» меняет поставщика на другого. Свои предприятия отдают товар по себестоимости плюс 1% за доставку.</p>
       <h3>Биржа предприятий</h3><p>Конкуренты продают свои предприятия — с подразделениями, уровнем и оборудованием. Свои предприятия можно продать по лучшей ставке
       конкурента или выставить по своей цене: если она не выше оценки больше чем на 20%, покупатель найдётся за несколько дней.</p>
       <h3>Оборудование</h3><p>Линии, тракторы, горное оборудование, краны, холодильники — это товары. Их покупают у поставщиков (или делают на своём машиностроительном и электронном заводе)

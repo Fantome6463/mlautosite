@@ -87,18 +87,62 @@ export function defaultSrc(s, g, e) {
   const own = Object.values(s.enterprises).find(x => x !== e && x.divs.some(d => d.recipe === g));
   return own ? own.id : inDepot(g) ? 'depot' : null;
 }
+// Снабжение товаром: заказ в день и список поставщиков по очереди — если у первого раскупили, добирают у следующего.
+// e.supply[g] = { qty, srcs: ['depot' | 'npc0'… | id своего предприятия] }
+const normSrc = src => (typeof src === 'string' && /^\d+$/.test(src) ? +src : src);
+function checkSrc(s, e, g, src) {
+  if (!GOODS[g] || !accepts(e, g)) return `${entDef(e).name} не принимает «${GOODS[g]?.name}»`;
+  if (src == null) return 'Этот товар негде взять — его нужно производить';
+  if (src === e.id) return 'Нельзя поставлять самому себе';
+  if (typeof src === 'number' && !s.enterprises[src]) return 'Предприятие не найдено';
+  return null;
+}
+export const supplyOf = (e, g) => e.supply?.[g] || null;
+// Один поставщик (заменяет список) — для авто-снабжения, отгрузки со стороны поставщика
 export function setSupply(s, e, g, src, qty) {
-  if (!GOODS[g] || !accepts(e, g)) return { error: `${entDef(e).name} не принимает «${GOODS[g]?.name}»` };
-  if (src == null || src === '') src = defaultSrc(s, g, e);
-  if (src == null) return { error: 'Этот товар негде взять — его нужно производить' };
-  if (typeof src === 'string' && /^\d+$/.test(src)) src = +src;
-  if (src === e.id) return { error: 'Нельзя поставлять самому себе' };
-  e.supply[g] = { src, qty: Math.max(0, Math.round(qty ?? e.supply[g]?.qty ?? 0)) };
+  src = normSrc(src == null || src === '' ? defaultSrc(s, g, e) : src);
+  const err = checkSrc(s, e, g, src);
+  if (err) return { error: err };
+  e.supply[g] = { qty: Math.max(0, Math.round(qty ?? e.supply[g]?.qty ?? 0)), srcs: [src] };
   return { ok: true };
 }
+// «+» — ещё один поставщик в очередь
+export function addSupplier(s, e, g, src, qty) {
+  src = normSrc(src);
+  const err = checkSrc(s, e, g, src);
+  if (err) return { error: err };
+  const sp = e.supply[g] ||= { qty: Math.max(0, Math.round(qty || 0)), srcs: [] };
+  if (sp.srcs.includes(src)) return { error: 'Этот поставщик уже выбран' };
+  sp.srcs.push(src);
+  return { ok: true };
+}
+// «Заменить» — поставщик под номером idx меняется на другого
+export function replaceSupplier(s, e, g, idx, src) {
+  src = normSrc(src);
+  const err = checkSrc(s, e, g, src), sp = e.supply[g];
+  if (err) return { error: err };
+  if (!sp || !(idx in sp.srcs)) return addSupplier(s, e, g, src);
+  if (sp.srcs.includes(src)) return { error: 'Этот поставщик уже выбран' };
+  sp.srcs[idx] = src;
+  return { ok: true };
+}
+export function removeSupplier(s, e, g, idx) {
+  const sp = e.supply[g];
+  if (!sp) return;
+  sp.srcs.splice(idx, 1);
+  if (!sp.srcs.length) delete e.supply[g];
+}
 export function removeSupply(s, e, g) { delete e.supply[g]; }
+// Заменить поставщика-предприятие во всех снабжениях (закрытие, объединение)
+function retargetSupplier(s, from, to) {
+  for (const x of Object.values(s.enterprises)) for (const g in x.supply || {}) {
+    const sp = x.supply[g];
+    sp.srcs = [...new Set(sp.srcs.map(v => (v === from ? (to === x.id ? null : to ?? (inDepot(g) ? 'depot' : null)) : v)).filter(v => v != null))];
+    if (!sp.srcs.length) delete x.supply[g];
+  }
+}
 // Кому предприятие поставляет (по снабжению получателей)
-export const consumersOf = (s, e) => Object.values(s.enterprises).flatMap(x => Object.entries(x.supply || {}).filter(([, v]) => v.src === e.id).map(([g, v]) => ({ to: x, g, qty: v.qty })));
+export const consumersOf = (s, e) => Object.values(s.enterprises).flatMap(x => Object.entries(x.supply || {}).filter(([, v]) => v.srcs.includes(e.id)).map(([g, v]) => ({ to: x, g, qty: v.qty })));
 
 // ---------- подразделения и персонал ----------
 export const workersOf = e => e.divs.reduce((a, d) => a + d.workers, 0);
@@ -436,8 +480,11 @@ export function mergeEnterprises(s, dst, src) {
   ledgerPay(s, -fee, 'equipment', { party: 'Юридическая фирма', from: dst.name, type: `Объединение с «${src.name}»` });
   dst.divs.push(...src.divs);
   for (const g in src.stock) { const x = src.stock[g]; addStock(dst, g, x.qty, x.q, x.c); }
-  for (const g in src.supply) if (!dst.supply[g] && src.supply[g].src !== dst.id) dst.supply[g] = { ...src.supply[g] };
-  if (dst.supply) for (const g in dst.supply) if (dst.supply[g].src === src.id) delete dst.supply[g];
+  for (const g in src.supply) {
+    const a = src.supply[g], b = dst.supply[g];
+    if (!b) dst.supply[g] = { qty: a.qty, srcs: [...a.srcs] };
+    else { b.qty += a.qty; b.srcs = [...new Set([...b.srcs, ...a.srcs])]; }
+  }
   for (const g in src.autoSell) dst.autoSell[g] ||= src.autoSell[g];
   for (const g in src.prices) dst.prices[g] ??= src.prices[g];
   dst.lvl = Math.min(ENT_MAX_LEVEL, Math.max(levelOf(dst), (dst.lvl || 1) + (src.lvl || 1)));
@@ -448,8 +495,7 @@ export function mergeEnterprises(s, dst, src) {
   dst.hist = dst.hist.map((h, n) => { const o = src.hist[src.hist.length - dst.hist.length + n]; return o ? { rev: h.rev + o.rev, exp: h.exp + o.exp } : h; });
   for (const x of s.specs || []) if (x.job === src.id) x.job = specOf(s, dst) ? null : dst.id;
   // кто получал товар от src — теперь получает от dst
-  for (const x of Object.values(s.enterprises)) for (const g in x.supply || {}) if (x.supply[g].src === src.id) x.supply[g].src = x === dst ? null : dst.id;
-  for (const g in dst.supply) if (dst.supply[g].src == null) delete dst.supply[g];
+  retargetSupplier(s, src.id, dst.id);
   delete s.enterprises[src.id];
   return { ok: true, fee };
 }
@@ -471,7 +517,7 @@ function dropEnterprise(s, id) {
   for (const x of s.specs || []) if (x.job === id) x.job = null;
   delete s.enterprises[id];
   // получатели переходят на склады города
-  for (const x of Object.values(s.enterprises)) for (const g in x.supply || {}) if (x.supply[g].src === id) x.supply[g].src = inDepot(g) ? 'depot' : null;
+  retargetSupplier(s, id, null);
 }
 
 // ---------- биржа предприятий: покупка и продажа между вами и компаниями-конкурентами ----------
@@ -685,31 +731,36 @@ export function productionTick(s, { spend, earn, fx, news }) {
   const idle = e => e.type === 'construction' && !Object.values(s.buildings).some(b => b.builder === e.id && b.state === 'build');
   for (const e of list) for (const g in e.supply) {
     const sp = e.supply[g];
-    if (!sp || !(sp.qty > 0) || sp.src == null || idle(e) || !accepts(e, g)) continue;
-    const want = Math.min(sp.qty, freeSpace(e));
-    if (want <= 0) continue;
-    if (typeof sp.src === 'number') {
-      // своё предприятие: себестоимость едет вместе с товаром
-      const A = s.enterprises[sp.src];
-      if (!A) continue;
-      const qty = Math.floor(Math.min(want, stockQty(A, g)) * 1000) / 1000;
+    if (!sp || !(sp.qty > 0) || !sp.srcs?.length || idle(e) || !accepts(e, g)) continue;
+    let want = Math.min(sp.qty, freeSpace(e));
+    // поставщики по очереди: что не добрали у первого — берём у следующего
+    for (const src of sp.srcs) {
+      if (want <= 0) break;
+      if (typeof src === 'number') {
+        // своё предприятие: себестоимость едет вместе с товаром
+        const A = s.enterprises[src];
+        if (!A) continue;
+        const qty = Math.floor(Math.min(want, stockQty(A, g)) * 1000) / 1000;
+        if (qty <= 0) continue;
+        const { q, c } = takeStock(A, g, qty);
+        const tr = s.prices[g] * TRANSPORT_RATE;
+        addStock(e, g, qty, q, c + tr);
+        efl(A, g, 'shipped', qty); efl(e, g, 'received', qty);
+        pay(A, Math.round(qty * tr), 'transport', 'Транспортная компания');
+        want -= qty;
+        continue;
+      }
+      const o = offerOf(s, g, src, e);
+      if (!o) continue;
+      const qty = Math.floor(Math.min(want, o.avail, Math.max(0, s.money) / o.price));
       if (qty <= 0) continue;
-      const { q, c } = takeStock(A, g, qty);
-      const tr = s.prices[g] * TRANSPORT_RATE;
-      addStock(e, g, qty, q, c + tr);
-      efl(A, g, 'shipped', qty); efl(e, g, 'received', qty);
-      pay(A, Math.round(qty * tr), 'transport', 'Транспортная компания');
-      continue;
+      addStock(e, g, qty, o.q, o.price);
+      takeOffer(s, g, src, qty);
+      flow(s, g, 'bought', qty);
+      efl(e, g, 'bought', qty); efl(e, g, 'spent', qty * o.price);
+      pay(e, qty * o.price, 'purchase', o.name);
+      want -= qty;
     }
-    const o = offerOf(s, g, sp.src, e);
-    if (!o) continue;
-    const qty = Math.floor(Math.min(want, o.avail, Math.max(0, s.money) / o.price));
-    if (qty <= 0) continue;
-    addStock(e, g, qty, o.q, o.price);
-    takeOffer(s, g, sp.src, qty);
-    flow(s, g, 'bought', qty);
-    efl(e, g, 'bought', qty); efl(e, g, 'spent', qty * o.price);
-    pay(e, qty * o.price, 'purchase', o.name);
   }
   // производство по подразделениям (дробный выпуск копится: 0,3 автомобиля в день — машина за 3–4 дня)
   for (const e of list) {
@@ -985,7 +1036,9 @@ export function migrateEnterprises(s) {
     e.supply ||= {};
     for (const g in e.buy || {}) if (GOODS[g] && !e.supply[g]) e.supply[g] = { src: 'depot', qty: e.buy[g] };
     delete e.buy;
+    // один поставщик → очередь поставщиков
+    for (const g in e.supply) { const sp = e.supply[g]; if (!sp.srcs) e.supply[g] = { qty: sp.qty || 0, srcs: sp.src != null ? [sp.src] : [] }; if (!e.supply[g].srcs.length) delete e.supply[g]; }
   }
-  for (const c of s.contracts || []) { const B = s.enterprises[c.to]; if (B && GOODS[ren(c.good)] && s.enterprises[c.from]) B.supply[ren(c.good)] = { src: c.from, qty: c.qty }; }
+  for (const c of s.contracts || []) { const B = s.enterprises[c.to]; if (B && GOODS[ren(c.good)] && s.enterprises[c.from]) B.supply[ren(c.good)] = { qty: c.qty, srcs: [c.from] }; }
   s.contracts = [];
 }

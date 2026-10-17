@@ -24,7 +24,7 @@ export const QUESTS = [
   { id: 'apt',    text: 'Заселите 20 квартир',                     reward: 400000,  check: s => occTotal(mine(s), 'apt') >= 20 },
   { id: 'office', text: 'Сдайте 15 офисов',                        reward: 500000,  check: s => occTotal(mine(s), 'office') >= 15 },
   { id: 'ent',    text: 'Создайте предприятие (ферму, завод…)',    reward: 200000,  check: s => Object.keys(s.enterprises).length > 0 },
-  { id: 'chain',  text: 'Выберите своё предприятие поставщиком',   reward: 200000,  check: s => Object.values(s.enterprises).some(e => Object.values(e.supply || {}).some(v => typeof v.src === 'number')) },
+  { id: 'chain',  text: 'Выберите своё предприятие поставщиком',   reward: 200000,  check: s => Object.values(s.enterprises).some(e => Object.values(e.supply || {}).some(v => v.srcs?.some(x => typeof x === 'number'))) },
   { id: 'shop',   text: 'Откройте магазин в жилом доме',          reward: 300000,  check: s => Object.values(s.enterprises).some(e => e.type === 'shop') },
   { id: 'sale',   text: 'Продайте товаров на 100 000 ₽ за день',    reward: 400000,  check: s => s.lastShopRevenue >= 100000 },
   { id: 'social', text: 'Постройте больницу, полицию или школу',   reward: 600000,  check: s => mine(s).some(b => b.state === 'done' && BUILDINGS[b.type].category === 'social') },
