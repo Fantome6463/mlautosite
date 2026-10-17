@@ -1,16 +1,16 @@
 // Экономическая модель: недвижимость, стройки, аренда, спрос горожан.
 // Модуль не знает ни про DOM, ни про 3D — только данные.
 import {
-  UNITS, BUILDINGS, CONTRACTORS, ADVANCE, START_MONEY, GRID, isRoad, RIVALS, EVENTS, TENANTS, CATEGORIES, OWN,
+  UNITS, BUILDINGS, CONTRACTORS, ADVANCE, START_MONEY, PLOT_SIZES, plotK, isArea, GRID, isRoad, RIVALS, EVENTS, TENANTS, CATEGORIES, OWN,
   HQ, HQ_MAX, hqLimit, hqUpgradeCost, FINANCE_PENALTY, cityLevelOf, COMPANY_MAX_LEVEL, companyXpNeed, LEVEL_BONUS,
 } from './data.js';
 import {
-  initProduction, productionTick, enterprisesValue, goodsEvent, shopsIn, stockQty, takeStock, maxWorkers, salaryEff, specBonus, refreshCandidates,
+  initProduction, productionTick, enterprisesValue, goodsEvent, shopsIn, shopArea, stockQty, takeStock, maxWorkers, salaryEff, specBonus, refreshCandidates,
   workersOf, levelOf, migrateEnterprises,
 } from './production.js';
 import { initLedger, pay, closeDay, flow } from './ledger.js';
 
-const SAVE_KEY = 'bizgame-save-v3'; // v3 — реальные цены, старые сохранения несовместимы
+const SAVE_KEY = 'bizgame-save-v4'; // v4 — коммерция в м², участки разной площади
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const round1 = v => Math.round(v * 10) / 10;
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
@@ -35,7 +35,7 @@ const occTotal = (list, t) => list.reduce((a, b) => a + (b.units[t]?.occ || 0), 
 
 export function newGame() {
   const s = {
-    version: 3, day: 1, money: START_MONEY, loan: 0, nextId: 1, debtDays: 0, bankrupt: false,
+    version: 4, day: 1, money: START_MONEY, loan: 0, nextId: 1, debtDays: 0, bankrupt: false,
     mods: {}, plots: {}, buildings: {}, history: [], news: [], quests: {},
     city: { households: 0, jobs: 0, demand: { apt: 0, office: 0, comm: 0 } },
     rivals: RIVALS.map(r => ({ ...r, worth: 5000000 + Math.random() * 3000000 })),
@@ -47,9 +47,10 @@ export function newGame() {
   for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
     if (isRoad(i, j)) continue;
     const central = 1 - Math.hypot(i - c, j - c) / Math.hypot(c, c); // 1 в центре, 0 в углу
+    const r = Math.random(), size = r < 0.3 ? 's' : r < 0.75 ? 'm' : 'l';
     s.plots[key(i, j)] = {
-      i, j,
-      price: Math.round((160000 + central * central * 1400000) / 10000) * 10000,
+      i, j, size,
+      price: Math.round(((160000 + central * central * 1400000) * PLOT_SIZES[size].k) / 10000) * 10000,
       loc: round1(0.6 + central * 1.1),
     };
   }
@@ -70,7 +71,7 @@ export function load() {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw);
-    if (!s || s.version !== 3) return null;
+    if (!s || s.version !== 4) return null;
     s.hq ||= { staff: 1, manage: 1, prod: 1, build: 1 };
     s.cityName ||= 'Новоград';
     s.accNo ||= 100000 + Math.floor(Math.random() * 900000);
@@ -83,14 +84,14 @@ export function load() {
   } catch { return null; }
 }
 export function wipeSave() {
-  try { localStorage.removeItem(SAVE_KEY); localStorage.removeItem('bizgame-save-v2'); localStorage.removeItem('bizgame-save-v1'); } catch { /* нет доступа */ }
+  try { localStorage.removeItem(SAVE_KEY); localStorage.removeItem('bizgame-save-v2'); localStorage.removeItem('bizgame-save-v3'); localStorage.removeItem('bizgame-save-v1'); } catch { /* нет доступа */ }
 }
 
 // ---------- стройка ----------
 export const buildingAt = (s, i, j) => Object.values(s.buildings).find(b => b.i === i && b.j === j);
 const mod = (s, k) => s.mods[k]?.mult || 1;
 
-export const materialsFor = (type, floors) => Object.fromEntries(Object.entries(BUILDINGS[type].materials).map(([g, n]) => [g, n * floors]));
+export const materialsFor = (type, floors, k = 1) => Object.fromEntries(Object.entries(BUILDINGS[type].materials).map(([g, n]) => [g, Math.round(n * floors * k * 10) / 10]));
 // Уровень компании растёт с капиталом: открывает новые виды предприятий
 // Уровень компании (= уровень персонажа в Бизмании) растёт с опытом и открывает новые виды предприятий
 export const companyLevel = s => s.compLvl || 1;
@@ -108,16 +109,18 @@ function companyXp(s, v) {
 }
 export const builders = s => Object.values(s.enterprises).filter(e => e.type === 'construction');
 
-export function quote(s, type, floors, contractor) {
+// k — размер участка: на крупном здание шире, дороже и вмещает больше помещений
+export function quote(s, type, floors, contractor, k = 1) {
   const d = BUILDINGS[type];
+  if (BUILDINGS[type].category === 'social') k = 1;
   if (contractor === 'own') {
-    const materials = materialsFor(type, floors);
+    const materials = materialsFor(type, floors, k);
     const cost = Object.entries(materials).reduce((a, [g, n]) => a + n * s.prices[g], 0);
     return { cost: Math.round(cost / 1000) * 1000, days: Math.max(3, Math.round(d.days(floors))), quality: OWN.quality, own: true, materials };
   }
   const c = CONTRACTORS[contractor];
   return {
-    cost: Math.round(d.cost(floors) * c.price * mod(s, 'build') / 10000) * 10000,
+    cost: Math.round(d.cost(floors) * k * c.price * mod(s, 'build') / 10000) * 10000,
     days: Math.max(3, Math.round(d.days(floors) * c.speed)),
     quality: c.quality,
   };
@@ -127,7 +130,7 @@ export function orderCheck(s, type, floors, contractor, i, j) {
   const p = s.plots[key(i, j)];
   if (!p) return 'Здесь дорога';
   if (buildingAt(s, i, j)) return 'Участок уже занят';
-  const q = quote(s, type, floors, contractor);
+  const q = quote(s, type, floors, contractor, plotK(p));
   if (q.own && !builders(s).length) return 'Сначала создайте строительную компанию (меню «Предприятия»)';
   const sites = mine(s).filter(b => b.state === 'build').length;
   if (sites >= hqLimit(s, 'build')) return `Строительный отдел: не больше ${hqLimit(s, 'build')} строек одновременно. Повысьте уровень в штаб-квартире.`;
@@ -142,7 +145,8 @@ export function order(s, type, floors, contractor, i, j, owner = 'player') {
     if (err) return { error: err };
   }
   const p = s.plots[key(i, j)];
-  const q = quote(s, type, floors, contractor);
+  const k = BUILDINGS[type].category === 'social' ? 1 : plotK(p);
+  const q = quote(s, type, floors, contractor, k);
   const advance = q.own ? 0 : Math.round(q.cost * ADVANCE);
   const bname = `${BUILDINGS[type].name} (участок ${i}:${j})`;
   if (owner === 'player') {
@@ -150,7 +154,7 @@ export function order(s, type, floors, contractor, i, j, owner = 'player') {
     pay(s, -advance, 'construction', { party: CONTRACTORS[contractor]?.name, from: bname, type: 'Аванс подрядчику' });
   }
   const units = {};
-  for (const [t, n] of Object.entries(BUILDINGS[type].units(floors))) {
+  for (const [t, n] of Object.entries(BUILDINGS[type].units(floors, k))) {
     units[t] = { total: n, occ: 0, rent: Math.round(refRent(p, t)) };
   }
   const b = {
@@ -176,10 +180,10 @@ export function cancelBuild(s, id) {
   addNews(s, `Стройка отменена, возвращено ${fmt(refund)}`);
 }
 
+// Заполненность — среднее по видам помещений (квартиры считаются штуками, коммерция — м²)
 export const occRate = b => {
-  const all = Object.values(b.units);
-  const tot = all.reduce((a, u) => a + u.total, 0);
-  return tot ? all.reduce((a, u) => a + u.occ, 0) / tot : 1;
+  const all = Object.values(b.units).filter(u => u.total > 0);
+  return all.length ? all.reduce((a, u) => a + u.occ / u.total, 0) / all.length : 1;
 };
 export const marketValue = b => Math.round(b.land + b.cost * (0.7 + 0.35 * occRate(b)));
 
@@ -192,6 +196,16 @@ export function sell(s, id) {
   delete s.buildings[id];
   addNews(s, `${BUILDINGS[b.type].name} продан за ${fmt(v)}`);
   return { ok: true };
+}
+
+// Арендаторы коммерческих площадей: у каждого своя площадь; занятая площадь округляется до их суммы
+export function syncAreaTenants(b, t = 'comm') {
+  const u = b.units[t], list = (b.tenants[t] ||= []).map(x => (typeof x === 'string' ? { n: x, a: 60 } : x));
+  b.tenants[t] = list;
+  let sumA = list.reduce((a, x) => a + x.a, 0);
+  while (sumA > u.occ && list.length) sumA -= list.pop().a;
+  while (u.occ - sumA >= 40) { const a = Math.min(u.occ - sumA, 40 + 10 * Math.floor(Math.random() * 12)); list.push({ n: pick(TENANTS[t]), a }); sumA += a; }
+  u.occ = sumA;
 }
 
 // ---------- привлекательность ----------
@@ -291,7 +305,7 @@ export function tick(s) {
   // 2. Спрос горожан
   const done = all.filter(b => b.state === 'done');
   const households = occTotal(done, 'apt');
-  const jobs = occTotal(done, 'office') * 8 + occTotal(done, 'comm') * 4;
+  const jobs = occTotal(done, 'office') * 8 + Math.round(occTotal(done, 'comm') / 15);
   const count = t => done.filter(b => b.type === t).length;
   const hosp = count('hospital'), pol = count('police'), sch = count('school');
   const cityLevel = cityLevelOf({ police: pol, hospital: hosp, school: sch });
@@ -299,7 +313,7 @@ export function tick(s) {
   const demand = {
     apt: (150 + 4 * s.day + 0.5 * jobs) * cityBonus * mod(s, 'apt'),
     office: (20 + 0.4 * s.day + 0.07 * households) * mod(s, 'office'),
-    comm: (4 + 0.06 * s.day + 0.05 * households) * mod(s, 'comm'),
+    comm: (10 + 0.1 * s.day + 0.05 * households) * 60 * mod(s, 'comm'), // м²
   };
   s.city = { households, jobs, population: Math.round(households * 2.4), demand, level: cityLevel, social: { police: pol, hospital: hosp, school: sch } };
 
@@ -311,12 +325,13 @@ export function tick(s) {
     list.forEach((b, n) => {
       const u = b.units[t];
       const p = s.plots[key(b.i, b.j)];
-      const free = t === 'comm' ? u.total - shopsIn(s, b).length : u.total;
+      const free = isArea(t) ? u.total - shopArea(s, b) : u.total;
       const target = Math.min(free * acceptance(u.rent, refRent(p, t)), (demand[t] * w[n]) / sum);
       const step = target - u.occ;
       const max = Math.max(1, Math.ceil(u.total * (step > 0 ? 0.2 : 0.15)));
       u.occ = clamp(u.occ + clamp(Math.round(step), -max, max), 0, free);
-      if (TENANTS[t]) {
+      if (isArea(t)) syncAreaTenants(b, t);
+      else if (TENANTS[t]) {
         const names = b.tenants[t] || (b.tenants[t] = []);
         while (names.length < u.occ) names.push(pick(TENANTS[t]));
         names.length = u.occ;
@@ -426,7 +441,8 @@ function rivalsBuild(s) {
   if (Math.random() > Math.min(0.3, 0.08 + s.day * 0.002)) return;
   const done = Object.values(s.buildings);
   const hasSocial = t => done.some(b => b.type === t);
-  let type = Math.random() < 0.55 ? 'residential' : 'office';
+  const rr = Math.random();
+  let type = rr < 0.45 ? 'residential' : rr < 0.75 ? 'office' : rr < 0.88 ? 'mixed' : 'mall';
   if (s.day > 15 && Math.random() < 0.15) type = !hasSocial('hospital') ? 'hospital' : !hasSocial('school') ? 'school' : ['hospital', 'police', 'school'][Math.floor(Math.random() * 3)];
   // участки получше выбираются чаще
   const weights = free.map(p => p.loc * p.loc);

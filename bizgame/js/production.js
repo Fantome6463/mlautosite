@@ -12,8 +12,14 @@ import { pay as ledgerPay, flow } from './ledger.js';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const round1 = v => Math.round(v * 10) / 10;
 const round2 = v => Math.round(v * 100) / 100;
-export const MAX_DIVS = 4;
 export const MAX_DIV_LEVEL = 100;
+// Торговля (магазины, рестораны, салоны, автосервисы): отдел занимает площадь, растущую с уровнем; максимум 7-й уровень.
+// Число подразделений не ограничено — только свободными уровнями предприятия и площадью помещения.
+export const SHOP_DIV_MAX = 7;
+export const AREA_BY_LEVEL = [0, 60, 120, 200, 300, 420, 560, 720]; // м² на отдел по уровню
+export const maxDivLevel = e => (entDef(e).sells ? SHOP_DIV_MAX : MAX_DIV_LEVEL);
+export const divArea = (e, d, level = d.level) => (entDef(e).sells ? AREA_BY_LEVEL[Math.min(SHOP_DIV_MAX, level)] : 0);
+export const entArea = e => e.divs.reduce((a, d) => a + divArea(e, d), 0);
 // Опыт и уровень предприятия: опыт идёт за производство, продажи, поставки, исследования и стройку.
 // Уровни подразделений расходуют уровни предприятия: новое подразделение или улучшение — только при свободном уровне.
 export const ENT_MAX_LEVEL = 100;
@@ -158,16 +164,35 @@ function efl(e, g, field, v) {
 
 // ---------- точки продаж в городе ----------
 export const shopsIn = (s, b) => Object.values(s.enterprises).filter(e => e.host === b.id);
-export function shopSlots(s, b) {
+export const shopArea = (s, b) => shopsIn(s, b).reduce((a, e) => a + entArea(e), 0);
+// Свободная коммерческая площадь, м². В своём доме можно потеснить арендаторов.
+export function freeArea(s, b) {
   const u = b.units?.comm;
   if (!u || b.state !== 'done') return 0;
-  return u.total - u.occ - shopsIn(s, b).length + (b.owner === 'player' ? u.occ : 0);
+  return u.total - u.occ - shopArea(s, b) + (b.owner === 'player' ? u.occ : 0);
 }
-export const shopHosts = s => Object.values(s.buildings).filter(b => shopSlots(s, b) > 0);
+export const shopSlots = freeArea;
+export const shopHosts = (s, need = AREA_BY_LEVEL[1]) => Object.values(s.buildings).filter(b => freeArea(s, b) >= need);
 export const hostRent = (s, e) => {
   const b = s.buildings[e.host];
-  return b && b.owner !== 'player' ? b.units.comm.rent : 0;
+  return b && b.owner !== 'player' ? Math.round(b.units.comm.rent * entArea(e)) : 0;
 };
+// Освободить площадь в своём доме: арендаторы съезжают, пока не хватит места
+function makeRoom(s, b, need) {
+  const u = b.units.comm;
+  if (b.owner !== 'player') return;
+  const list = b.tenants.comm || [];
+  while (u.total - u.occ - shopArea(s, b) < need && list.length) { const x = list.pop(); u.occ = Math.max(0, u.occ - (x.a || 60)); }
+}
+// Хватает ли площади в помещении на расширение отдела или новый отдел
+function areaCheck(s, e, add) {
+  if (!entDef(e).sells || add <= 0) return null;
+  const b = s.buildings[e.host];
+  if (!b) return 'Нет помещения';
+  if (freeArea(s, b) < add) return `Не хватает площади: нужно ещё ${add} м², свободно ${Math.max(0, freeArea(s, b))} м². Переезд в дом попросторнее — через новое предприятие.`;
+  makeRoom(s, b, add);
+  return null;
+}
 
 // ---------- лимиты штаб-квартиры ----------
 export const products = s => new Set(Object.values(s.enterprises).flatMap(e => e.divs.filter(d => d.recipe && canMake(e, d.recipe)).map(d => d.recipe)));
@@ -259,7 +284,7 @@ export function catchment(s, b, R, profile, selfId = null) {
     const k = 1 - dist / (R + 1);
     if (x.units.apt) pop += x.units.apt.occ * 2.4 * k;
     if (x.units.office) pop += x.units.office.occ * 8 * 0.3 * k;
-    if (profile) for (const n of x.tenants?.comm || []) if (TENANT_PROFILE[n] === profile) comp++;
+    if (profile) for (const n of x.tenants?.comm || []) if (TENANT_PROFILE[n.n || n] === profile) comp++;
   }
   if (profile) for (const e of Object.values(s.enterprises)) {
     if (e.id === selfId || !e.host || profileOf(e) !== profile) continue;
@@ -300,7 +325,7 @@ export function createEnterprise(s, type, sub, opts = {}) {
   let host = null;
   if (def.sells) {
     host = s.buildings[opts.hostId];
-    if (!host || shopSlots(s, host) <= 0) return { error: 'Нужно свободное коммерческое помещение в жилом доме' };
+    if (!host || freeArea(s, host) < AREA_BY_LEVEL[1]) return { error: `Нужно ${AREA_BY_LEVEL[1]} м² свободной коммерческой площади` };
   }
   if (type === 'mine') {
     const mined = minedTypes(s);
@@ -312,10 +337,7 @@ export function createEnterprise(s, type, sub, opts = {}) {
     recipe = opts.recipe && options.includes(opts.recipe) ? opts.recipe : options.find(r => products(s).has(r)) || options[0];
     if (!canProduce(s, recipe)) return { error: `Производственный отдел: не больше ${hqLimit(s, 'prod')} разных продуктов. Повысьте уровень в штаб-квартире.` };
   }
-  if (host) {
-    const u = host.units.comm;
-    if (host.owner === 'player' && u.total - u.occ - shopsIn(s, host).length <= 0) { u.occ--; host.tenants.comm?.pop(); }
-  }
+  if (host) makeRoom(s, host, AREA_BY_LEVEL[1]);
   const count = Object.values(s.enterprises).filter(e => e.type === type && e.sub === (sub || null)).length + 1;
   const e = {
     id: s.nextId++, type, sub: sub || null, name: opts.name?.trim() || `${def.name} №${count}`, invested: def.cost,
@@ -329,7 +351,6 @@ export function createEnterprise(s, type, sub, opts = {}) {
 }
 
 export function addDivision(s, e, recipe) {
-  if (e.divs.length >= MAX_DIVS) return { error: `Не больше ${MAX_DIVS} подразделений` };
   if (freeLevels(e) < 1) return { error: NO_FREE };
   const options = recipesFor(e.type, e.sub);
   if (options.length && !entDef(e).goods) {
@@ -338,6 +359,8 @@ export function addDivision(s, e, recipe) {
   } else recipe = null;
   const cost = divCost(e);
   if (s.money < cost) return { error: `Нужно ${cost.toLocaleString('ru-RU')} ₽` };
+  const err = areaCheck(s, e, AREA_BY_LEVEL[1]);
+  if (err) return { error: err };
   const d = newDiv(s, e, recipe);
   e.divs.push(d);
   e.invested += cost;
@@ -345,10 +368,12 @@ export function addDivision(s, e, recipe) {
   return { div: d };
 }
 export function upgradeDiv(s, e, d) {
-  if (d.level >= MAX_DIV_LEVEL) return { error: 'Максимальный уровень' };
+  if (d.level >= maxDivLevel(e)) return { error: `Максимальный уровень отдела — ${maxDivLevel(e)}-й` };
   if (freeLevels(e) < 1) return { error: NO_FREE };
   const cost = divUpgradeCost(e, d);
   if (s.money < cost) return { error: `Нужно ${cost.toLocaleString('ru-RU')} ₽` };
+  const err = areaCheck(s, e, divArea(e, d, d.level + 1) - divArea(e, d));
+  if (err) return { error: err };
   ledgerPay(s, -cost, 'equipment', { party: 'Универсальные склады', from: e.name, type: 'Расширение подразделения' });
   const before = eqNeed(e, d);
   e.invested += cost; d.level++; d.target = divMax(e, d);
@@ -447,7 +472,7 @@ function makeListing(s) {
     divs: [], stock: {}, supply: {}, autoSell: {}, prices: {}, autoSupply: { on: false, weeks: 1 }, research: null, resDir: 'q', progress: 0,
     lvl, xp: 0, ad: 0, aware: BASE_AWARE, built: s.day, host: null, last: emptyLast(), hist: [], flh: [] };
   let left = lvl;
-  const n = Math.min(MAX_DIVS, 1 + Math.floor(Math.random() * Math.min(lvl, 3)));
+  const n = 1 + Math.floor(Math.random() * Math.min(lvl, 3));
   for (let k = 0; k < n && left > 0; k++) {
     const level = k === n - 1 ? left : 1 + Math.floor(Math.random() * Math.max(1, left - (n - k - 1)));
     left -= level;

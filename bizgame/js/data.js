@@ -19,32 +19,55 @@ export const depotOf = g => (DEPOT_KINDS.has(GOODS[g].kind) && RECIPES[g]
 
 // ---------- Город ----------
 
-// Помещения внутри зданий: сдаются арендаторам, цена — ₽ в день за одно помещение.
+// Помещения внутри зданий. Квартиры и офисы — штуками, аренда за помещение в день;
+// коммерция — площадью: total/occ в м², аренда — ₽ за м² в день.
 export const UNITS = {
   apt:    { name: 'Квартиры',      one: 'квартира',   icon: '🏠', rent: 1500, upkeep: 300 },
   office: { name: 'Офисы',         one: 'офис',       icon: '💼', rent: 3200, upkeep: 500 },
-  comm:   { name: 'Коммерция',     one: 'помещение',  icon: '🛍️', rent: 4500, upkeep: 600 },
+  comm:   { name: 'Коммерция',     one: 'м²',         icon: '🛍️', rent: 45, upkeep: 6, area: true },
 };
+export const isArea = t => !!UNITS[t]?.area;
 
-// Три типа зданий: офисные, жилые (с коммерцией на первом этаже) и социальные.
+// Участки разной площади: от размера зависят цена земли, площадь здания и стоимость стройки
+export const PLOT_SIZES = {
+  s: { name: 'Малый', area: '0,12 га', k: 0.7 },
+  m: { name: 'Средний', area: '0,18 га', k: 1 },
+  l: { name: 'Крупный', area: '0,27 га', k: 1.5 },
+};
+export const plotK = p => PLOT_SIZES[p?.size || 'm'].k;
+
+// Типы зданий: офисные, жилые (с коммерцией на первых этажах), коммерческие и социальные.
 export const CATEGORIES = {
   office:      { name: 'Офисные',  desc: 'Офисы сдаются компаниям. Дают рабочие места.' },
-  residential: { name: 'Жилые',    desc: 'Квартиры для горожан, на первом этаже — магазины и кафе.' },
-  social:      { name: 'Социальные', desc: 'Больница и полиция. Город платит за содержание, район становится привлекательнее.' },
+  residential: { name: 'Жилые',    desc: 'Квартиры для горожан, на первых этажах — площади под магазины и кафе.' },
+  commercial:  { name: 'Коммерческие', desc: 'Торговые площади под магазины, рестораны, салоны. Аренда за м².' },
+  social:      { name: 'Социальные', desc: 'Больница, полиция и школа. Город платит за содержание, район становится привлекательнее.' },
 };
 
 export const BUILDINGS = {
   office: {
     category: 'office', name: 'Бизнес-центр', icon: '🏢', floors: [4, 9, 16],
     cost: f => 600000 + f * 220000, days: f => Math.round(4 + f * 1.3),
-    units: f => ({ office: f * 4 }),
+    units: (f, k = 1) => ({ office: Math.round(f * 4 * k), ...(f >= 9 ? { comm: Math.round(160 * k) } : {}) }),
     materials: { concrete: 0.5, steel: 0.25, glass: 0.25 },
   },
   residential: {
     category: 'residential', name: 'Жилой дом', icon: '🏘️', floors: [5, 9, 16],
     cost: f => 500000 + f * 180000, days: f => Math.round(4 + f * 1.1),
-    units: f => ({ apt: (f - 1) * 4, comm: f >= 16 ? 4 : 3 }),
+    units: (f, k = 1) => ({ apt: Math.round((f - 1) * 4 * k), comm: Math.round((f >= 16 ? 480 : 360) * k) }),
     materials: { bricks: 0.45, concrete: 0.3, lumber: 0.12, glass: 0.13 },
+  },
+  mixed: {
+    category: 'residential', name: 'ЖК с торговой галереей', icon: '🏙️', floors: [12, 20], commFloors: 2,
+    cost: f => 700000 + f * 220000, days: f => Math.round(6 + f * 1.1),
+    units: (f, k = 1) => ({ apt: Math.round((f - 2) * 4 * k), comm: Math.round(800 * k) }),
+    materials: { concrete: 0.4, bricks: 0.3, glass: 0.2, steel: 0.1 },
+  },
+  mall: {
+    category: 'commercial', name: 'Торговый центр', icon: '🏬', floors: [2, 3, 5],
+    cost: f => 600000 + f * 1200000, days: f => Math.round(6 + f * 2.5),
+    units: (f, k = 1) => ({ comm: Math.round(f * 900 * k) }),
+    materials: { concrete: 0.45, steel: 0.3, glass: 0.25 },
   },
   hospital: {
     category: 'social', name: 'Больница', icon: '🏥', floors: [4],

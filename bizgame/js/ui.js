@@ -2,7 +2,7 @@
 import {
   GOODS, RECIPES, ENTERPRISES, BUILDINGS, UNITS, CATEGORIES, CONTRACTORS, OWN, contractorInfo, RIVALS,
   NPC_QUALITY, BUY_RATE, SELL_RATE, SHOP_TURNOVER_PER_WORKER, TRANSPORT_RATE, POP_SCALE, ADVANCE, unitOf,
-  HQ, HQ_MAX, hqLimit, hqUpgradeCost, specSalary, companyXpNeed, FEATURES, AUTO_SUPPLY_ENT_LEVEL,
+  PLOT_SIZES, plotK, isArea, HQ, HQ_MAX, hqLimit, hqUpgradeCost, specSalary, companyXpNeed, FEATURES, AUTO_SUPPLY_ENT_LEVEL,
 } from './data.js';
 import * as G from './game.js';
 import * as P from './production.js';
@@ -214,8 +214,9 @@ export class UI {
     if (!BUILDINGS[f.type].floors.includes(f.floors)) f.floors = BUILDINGS[f.type].floors[0];
     const locWord = p.loc >= 1.4 ? 'отличный' : p.loc >= 1.05 ? 'хороший' : p.loc >= 0.8 ? 'средний' : 'окраина';
     let h = `<h2>${ic('pin')} Свободный участок</h2><div class="sub">Участок ${p.i}:${p.j}</div>
-      <div class="kv"><span>Цена земли</span><span>${fmt(p.price)}</span><span>Район</span><span>${p.loc.toFixed(2)} — ${locWord}</span>${this.coverageHtml(p.i, p.j)}</div>
-      <p class="hint">В центре дороже земля, но выше аренда и больше покупателей. Больница и полиция рядом делают дом привлекательнее.</p>
+      <div class="kv"><span>Площадь участка</span><span>${PLOT_SIZES[p.size || 'm'].name}, ${PLOT_SIZES[p.size || 'm'].area}</span><span>Цена земли</span><span>${fmt(p.price)}</span>
+        <span>Район</span><span>${p.loc.toFixed(2)} — ${locWord}</span>${this.coverageHtml(p.i, p.j)}</div>
+      <p class="hint">В центре дороже земля, но выше аренда и больше покупателей. На крупном участке здание шире: больше квартир, офисов и торговых площадей, но и стройка дороже.</p>
       <div class="box"><h4>1. Что строим</h4>`;
     for (const cat in CATEGORIES) {
       const types = Object.keys(BUILDINGS).filter(t => BUILDINGS[t].category === cat);
@@ -226,14 +227,14 @@ export class UI {
     h += `</div>`;
     if (d.floors.length > 1) {
       h += `<div class="box"><h4>2. Этажность</h4><div class="chips">${d.floors.map(n => `<button class="chip ${f.floors === n ? 'on' : ''}" data-act="ffloors" data-v="${n}">${n} эт.</button>`).join('')}</div>
-        <div class="kv">${Object.entries(d.units(f.floors)).map(([t, n]) => `<span>${unitIc(t)} ${UNITS[t].name}</span><span>${n} шт. по ~${Math.round(G.refRent(p, t))} ₽/день</span>`).join('')}</div></div>`;
+        <div class="kv">${Object.entries(d.units(f.floors, plotK(p))).map(([t, n]) => `<span>${unitIc(t)} ${UNITS[t].name}</span><span>${isArea(t) ? `${num(n)} м² по ~${Math.round(G.refRent(p, t))} ₽/м²` : `${n} шт. по ~${num(G.refRent(p, t))} ₽`} в день</span>`).join('')}</div></div>`;
     } else {
       h += `<div class="box"><h4>2. Как работает</h4><div class="kv"><span>Город платит</span><span>${fmt(d.subsidy)}/день</span><span>Содержание</span><span>${fmt(d.upkeep)}/день</span>
         <span>Радиус</span><span>${d.radius} участка</span></div><p class="hint">Дома в радиусе охотнее снимают и платят за аренду больше. Город растёт быстрее.</p></div>`;
     }
     h += `<div class="box"><h4>3. Кто строит</h4>`;
     for (const c of [...Object.keys(CONTRACTORS), 'own']) {
-      const info = contractorInfo(c), q = G.quote(s, f.type, f.floors, c);
+      const info = contractorInfo(c), q = G.quote(s, f.type, f.floors, c, plotK(p));
       let extra = '';
       if (c === 'own') {
         const co = G.builders(s)[0];
@@ -246,7 +247,7 @@ export class UI {
         <div><b style="color:${info.color}">${info.name}</b> <span class="stars">${stars(q.quality)}</span><small>${info.desc}</small>${extra}</div>
         <div class="r"><b>${c === 'own' ? '~' : ''}${fmt(q.cost)}</b><small>${q.days} дн.</small></div></label>`;
     }
-    const q = G.quote(s, f.type, f.floors, f.contractor);
+    const q = G.quote(s, f.type, f.floors, f.contractor, plotK(p));
     const now = p.price + (q.own ? 0 : Math.round(q.cost * ADVANCE));
     const err = G.orderCheck(s, f.type, f.floors, f.contractor, p.i, p.j);
     h += `</div><div class="kv"><span>Земля</span><span>${fmt(p.price)}</span>
@@ -286,12 +287,12 @@ export class UI {
 
   unitsTable(b, editable) {
     const s = this.s, p = s.plots[G.key(b.i, b.j)];
-    let h = `<table><tr><th>Помещения</th><th class="r">Занято</th><th>Аренда, ₽/день</th><th class="r">Рынок</th></tr>`;
+    let h = `<table><tr><th>Помещения</th><th class="r">Занято</th><th>Аренда в день</th><th class="r">Рынок</th></tr>`;
     for (const t in b.units) {
-      const u = b.units[t];
-      const shops = t === 'comm' ? P.shopsIn(s, b).length : 0;
-      h += `<tr><td><span class="nm">${unitIc(t)}${UNITS[t].name}</span></td><td class="r">${u.occ + shops}/${u.total}</td>
-        <td>${editable ? `<input type="number" min="1" value="${u.rent}" data-act="rent" data-t="${t}" style="width:80px">` : u.rent}</td>
+      const u = b.units[t], area = isArea(t);
+      const shops = area ? P.shopArea(s, b) : 0;
+      h += `<tr><td><span class="nm">${unitIc(t)}${UNITS[t].name}</span></td><td class="r">${num(u.occ + shops)} / ${num(u.total)}${area ? ' м²' : ''}</td>
+        <td>${editable ? `<input type="number" min="1" value="${u.rent}" data-act="rent" data-t="${t}" style="width:80px">` : num(u.rent)} <span class="hint">₽${area ? '/м²' : ''}</span></td>
         <td class="r">${Math.round(G.refRent(p, t))}</td></tr>`;
     }
     return h + '</table>';
@@ -330,10 +331,10 @@ export class UI {
     if (b.units.apt) h += `<div class="box"><h4>${unitIc('apt')} Квартиры</h4>Живёт семей: <b>${b.units.apt.occ}</b> из ${b.units.apt.total} (≈${Math.round(b.units.apt.occ * 2.4)} чел.)</div>`;
     for (const t of ['comm', 'office']) {
       if (!b.units[t]) continue;
-      const names = b.tenants[t] || [];
-      h += `<div class="box"><h4>${unitIc(t)} ${UNITS[t].name}</h4>
-        ${t === 'comm' ? shops.map(e => `<div class="row">${eTile(e, 'sm')} <a href="#" data-act="openent" data-id="${e.id}">${esc(e.name)}</a> <span class="hint">${e.host && s.buildings[e.host].owner === 'player' ? 'ваш, без аренды' : 'ваш'}</span></div>`).join('') : ''}
-        ${names.length ? names.map(n => `<div class="row">${esc(n)}</div>`).join('') : (t === 'comm' && shops.length ? '' : '<span class="hint">Пусто</span>')}</div>`;
+      const names = b.tenants[t] || [], area = isArea(t);
+      h += `<div class="box"><h4>${unitIc(t)} ${UNITS[t].name}${area ? ` · ${num(b.units[t].total)} м², свободно ${num(Math.max(0, b.units[t].total - b.units[t].occ - P.shopArea(s, b)))} м²` : ''}</h4>
+        ${area ? shops.map(e => `<div class="row">${eTile(e, 'sm')} <a href="#" data-act="openent" data-id="${e.id}">${esc(e.name)}</a> <span class="hint">${P.entArea(e)} м² · ${s.buildings[e.host].owner === 'player' ? 'ваш, без аренды' : 'ваш'}</span></div>`).join('') : ''}
+        ${names.length ? names.map(n => `<div class="row">${esc(n.n || n)}${n.a ? ` <span class="hint">${n.a} м²</span>` : ''}</div>`).join('') : (area && shops.length ? '' : '<span class="hint">Пусто</span>')}</div>`;
     }
     h += this.openShopHtml(b);
     return h;
@@ -341,12 +342,12 @@ export class UI {
 
   openShopHtml(b) {
     const s = this.s;
-    if (!b.units.comm || P.shopSlots(s, b) <= 0) return '';
+    if (!b.units.comm || P.freeArea(s, b) < P.AREA_BY_LEVEL[1]) return '';
     const own = b.owner === 'player';
-    const free = b.units.comm.total - b.units.comm.occ - P.shopsIn(s, b).length;
+    const free = b.units.comm.total - b.units.comm.occ - P.shopArea(s, b);
     return `<div class="box"><h4>Своя точка продаж здесь</h4>
-      <p class="hint">${own ? (free > 0 ? 'Есть свободное помещение — аренду платить не нужно.' : 'Свободных помещений нет: один арендатор съедет.') : `Аренда ${fmt(b.units.comm.rent)}/день владельцу дома.`}
-      Открытие: ${fmt(ENTERPRISES.shop.cost)}.</p>
+      <p class="hint">Отдел 1-го уровня занимает ${P.AREA_BY_LEVEL[1]} м², 7-го — ${P.AREA_BY_LEVEL[7]} м². ${own ? (free >= P.AREA_BY_LEVEL[1] ? `Свободно ${num(free)} м² — аренду платить не нужно.` : 'Свободной площади мало: часть арендаторов съедет.') : `Свободно ${num(free)} м², аренда ${fmt(b.units.comm.rent)} за м² в день владельцу дома.`}
+      Открытие: от ${fmt(ENTERPRISES.shop.cost)}.</p>
       <button class="btn primary" data-act="openshop">${ic('store')} Открыть здесь магазин, ресторан, салон…</button></div>`;
   }
 
@@ -397,7 +398,7 @@ export class UI {
     for (const g in e.stock) stockVal += e.stock[g].qty * s.prices[g] * 0.6;
     const sp = P.specOf(s, e), eff = Math.min(1, (P.workersOf(e) / Math.max(1, P.maxWorkers(e))) * P.salaryEff(s, e) * P.specBonus(s, e) * (1 - wear / 2));
     const goods = [...new Set([...e.divs.map(x => x.recipe).filter(Boolean), ...Object.keys(e.stock)])].slice(0, 14);
-    const slots = Array.from({ length: P.MAX_DIVS }, (_, n) => e.divs[n]);
+    const slots = [...e.divs, null];
     return `<div class="co-grid">
       <div>
         <div class="row big2"><span title="Рабочие">${ic('hardhat')} ${num(P.workersOf(e))}</span><span title="Оборудование, шт.">${ic('gear')} ${num(e.divs.reduce((a, x) => a + (x.eqN || 0), 0))}</span></div>
@@ -441,7 +442,7 @@ export class UI {
           <td><span class="effbar"><i style="width:${Math.round(eff * 100)}%"></i></span></td><td class="r">${st ? fmt(st.c) : '—'}</td>
           <td><label class="switch"><input type="checkbox" data-act="divon" data-d="${x.id}" ${x.on ? 'checked' : ''}><i></i></label></td></tr>`;
       }).join('')}</table>
-      <p class="hint">Подразделений: ${e.divs.length} / ${P.MAX_DIVS}, свободных уровней: ${P.freeLevels(e)}. Новые подразделения — на вкладке «Подразделения». Технологии повышает лаборатория.</p>`;
+      <p class="hint">Подразделений: ${e.divs.length}, свободных уровней: ${P.freeLevels(e)}. Новые подразделения — на вкладке «Подразделения». Технологии повышает лаборатория.</p>`;
   }
 
   // Снабжение: для каждого товара — поставщик (склады города, конкуренты, свои предприятия) и объём в день
@@ -526,7 +527,8 @@ export class UI {
       ${e.divs.map((x, n) => {
         const max = P.divMax(e, x);
         return `<div class="divcard"><div class="dleft"><b>${esc(P.divName(e, x))}</b><div class="dtile">${eTile(e, 'xl')}</div>
-            <div>Уровень ${x.level} ${x.level < P.MAX_DIV_LEVEL ? `<button class="btn small" data-act="updiv" data-d="${x.id}" ${P.freeLevels(e) < 1 ? 'disabled' : ''} title="${P.freeLevels(e) < 1 ? 'Нужен свободный уровень предприятия' : 'Расширить: ' + fmt(P.divUpgradeCost(e, x))}">${ic('up')} ${fmtShort(P.divUpgradeCost(e, x))}</button>` : ''}
+            ${d.sells ? `<div class="hint">Площадь ${P.divArea(e, x)} м²${x.level < P.SHOP_DIV_MAX ? ` → ${P.divArea(e, x, x.level + 1)} м²` : ''}</div>` : ''}
+            <div>Уровень ${x.level}${d.sells ? ` из ${P.SHOP_DIV_MAX}` : ''} ${x.level < P.maxDivLevel(e) ? `<button class="btn small" data-act="updiv" data-d="${x.id}" ${P.freeLevels(e) < 1 ? 'disabled' : ''} title="${P.freeLevels(e) < 1 ? 'Нужен свободный уровень предприятия' : 'Расширить: ' + fmt(P.divUpgradeCost(e, x))}">${ic('up')} ${fmtShort(P.divUpgradeCost(e, x))}</button>` : ''}
             ${e.divs.length > 1 ? `<button class="btn small danger" data-act="rmdiv" data-d="${x.id}" title="Продать подразделение">${ic('trash')}</button>` : ''}</div></div>
           <div><div class="row"><label>Сотрудники</label><input type="range" min="0" max="${max}" value="${x.target}" data-act="divtarget" data-d="${x.id}"> <b>${x.target}</b></div>
             <div class="kv"><span>Работают</span><span>${x.workers} из ${max}</span><span>Фонд оплаты</span><span>${fmt(x.workers * e.salary)}/день</span>
@@ -543,7 +545,7 @@ export class UI {
             ${!x.on && x.workers ? '<p class="warn">Подразделение остановлено: рабочие получают 25% зарплаты.</p>' : ''}</div>
           <div class="dprod">${x.recipe ? `<span class="big3 ge">${GOODS[x.recipe].icon}</span><div class="hint">${GOODS[x.recipe].name}</div>` : ''}${n === 0 ? `<div class="boss">${sp ? `${ava(sp.name)}<br>${esc(sp.name)}<br><span class="star sm">${sp.level}</span>` : '<span class="hint">без начальника</span>'}</div>` : ''}</div></div>`;
       }).join('')}
-      <div class="actions"><button class="btn primary" data-act="adddiv" ${e.divs.length >= P.MAX_DIVS || P.freeLevels(e) < 1 ? 'disabled' : ''}>${ic('plus')} Новое подразделение (${fmt(P.divCost(e))})</button>
+      <div class="actions"><button class="btn primary" data-act="adddiv" ${P.freeLevels(e) < 1 ? 'disabled' : ''}>${ic('plus')} Новое подразделение (${fmt(P.divCost(e))}${d.sells ? `, ${P.AREA_BY_LEVEL[1]} м²` : ''})</button>
         <span class="hint">Свободных уровней: <b>${P.freeLevels(e)}</b>${P.freeLevels(e) < 1 ? ' — копите опыт: он идёт за производство и продажи' : ''}</span></div>
       <p class="hint">Уровень подразделения увеличивает штат, выпуск и склад. Оборудование изнашивается только в работе — износ снижает выработку, ремонт его обнуляет.
       Чем выше качество оборудования, тем больше выпуск и лучше продукция, но нужна квалификация персонала: квалификация города ${(s.cityQual || 5).toFixed(2)} плюс обучение (до +${P.TRAIN_MAX}).
@@ -650,8 +652,9 @@ export class UI {
         <span>Склад</span><span>${num(D.storage || 0)} ед.</span><span>Содержание</span><span>${fmt(D.upkeep)}/день</span></div>
         <div class="row"><label>Название</label><input type="text" id="crName" maxlength="40" value="${esc(D.name)}" style="flex:1;max-width:320px"></div>
         ${options.length && !D.goods ? `<div class="row"><label>Первый продукт</label><select id="crRecipe">${options.map(g => `<option value="${g}">${goodName(g)}${RECIPES[g].inputs && Object.keys(RECIPES[g].inputs).length ? ' ← ' + Object.keys(RECIPES[g].inputs).map(x => GOODS[x].icon).join('') : ''}</option>`).join('')}</select></div>` : ''}
-        ${D.sells ? (hosts.length ? `<div class="row"><label>Помещение</label><select id="crHost">${hosts.map(b => { const a = P.catchment(s, b, 3, cr.type === 'shop' ? 'shop:' + cr.sub : cr.type); return `<option value="${b.id}" ${b.id === cr.hostId ? 'selected' : ''}>Дом №${b.id} (${b.i}:${b.j}) — покупателей ~${a.pop}, конкурентов ${a.comp}, ${b.owner === 'player' ? 'ваш, без аренды' : 'аренда ' + b.units.comm.rent + ' ₽/день'}</option>`; }).join('')}</select></div>`
-          : '<p class="warn">Нужно коммерческое помещение на первом этаже жилого дома. Постройте жилой дом или дождитесь, пока конкуренты построят.</p>') : ''}
+        ${D.sells ? (hosts.length ? `<div class="row"><label>Помещение</label><select id="crHost">${hosts.map(b => { const a = P.catchment(s, b, 3, cr.type === 'shop' ? 'shop:' + cr.sub : cr.type); return `<option value="${b.id}" ${b.id === cr.hostId ? 'selected' : ''}>${BUILDINGS[b.type].name} №${b.id} (${b.i}:${b.j}) — свободно ${num(P.freeArea(s, b))} м², жителей ~${a.pop}, конкурентов ${a.comp}, ${b.owner === 'player' ? 'ваш, без аренды' : 'аренда ' + b.units.comm.rent + ' ₽/м²'}</option>`; }).join('')}</select></div>
+            <p class="hint">Отдел 1-го уровня займёт ${P.AREA_BY_LEVEL[1]} м². Чем выше уровень отдела, тем больше площади: до ${P.AREA_BY_LEVEL[7]} м² на 7-м уровне — выбирайте помещение с запасом.</p>`
+          : '<p class="warn">Нужна свободная коммерческая площадь: первые этажи жилых домов, ЖК с галереей, торговые центры. Постройте или дождитесь конкурентов.</p>') : ''}
         ${err ? `<p class="warn">${err}</p>` : ''}
         <div class="actions"><button class="btn" data-act="crback">${ic('left')} Назад</button><button class="btn primary" data-act="crcreate" ${err ? 'disabled' : ''}>Создать предприятие</button></div></div></div>`;
     return h;
@@ -837,6 +840,7 @@ export class UI {
 
   openPage(name, tab) {
     this.page = name;
+    if (name !== 'city' && this.sel) { this.sel = null; $('#side').hidden = true; this.app.world.setSelected(null); }
     if (name === 'company' && tab) this.coTab = tab;
     if (name === 'city' && tab) this.cityTab = tab;
     this.renderPage();
@@ -1414,8 +1418,8 @@ export class UI {
         <table class="grid"><tr><th>Помещения</th><th class="r">Спрос</th><th class="r">Всего в городе</th><th class="r">Занято</th><th class="r">Аренда в центре / на окраине</th></tr>`;
       for (const t in UNITS) {
         const tot = done.reduce((a, b) => a + (b.units[t]?.total || 0), 0), occ = done.reduce((a, b) => a + (b.units[t]?.occ || 0), 0);
-        h += `<tr><td><span class="nm">${unitIc(t)}${UNITS[t].name}</span></td><td class="r">${num(s.city.demand?.[t] || 0)}</td><td class="r">${num(tot)}</td><td class="r">${num(occ)}</td>
-          <td class="r">${Math.round(UNITS[t].rent * (0.6 + 0.4 * 1.7))} / ${Math.round(UNITS[t].rent * (0.6 + 0.4 * 0.6))} ₽</td></tr>`;
+        h += `<tr><td><span class="nm">${unitIc(t)}${UNITS[t].name}</span></td><td class="r">${num(s.city.demand?.[t] || 0)}${isArea(t) ? ' м²' : ''}</td><td class="r">${num(tot)}</td><td class="r">${num(occ)}</td>
+          <td class="r">${num(UNITS[t].rent * (0.6 + 0.4 * 1.7))} / ${num(UNITS[t].rent * (0.6 + 0.4 * 0.6))} ₽${isArea(t) ? ' за м²' : ''}</td></tr>`;
       }
       const mods = Object.entries(s.mods).map(([k, m]) => `${{ apt: 'жильё', office: 'офисы', comm: 'коммерция', build: 'стоимость стройки' }[k]} ×${m.mult} (${m.days} дн.)`);
       return h + `</table>${mods.length ? `<p class="warn">События: ${mods.join(', ')}</p>` : ''}
@@ -1512,6 +1516,9 @@ export class UI {
       <h3>Здания в городе</h3><p>Кликните по пустому участку и закажите стройку. Три типа зданий:<br>
       <b>офисные</b> — офисы сдаются компаниям;<br><b>жилые</b> — квартиры для горожан, на первом этаже — коммерческие помещения (магазины, кафе);<br>
       <b>социальные</b> — больница, полиция и школа: город платит за содержание, а дома вокруг становятся привлекательнее. Уровень города (до 5) растёт с числом социальных зданий: каждые 2 полиции+больницы+школы дают +1 и повышают спрос.</p>
+      <h3>Участки и площади</h3><p>Участки бывают малые, средние и крупные: на крупном здание шире — больше квартир, офисов и торговых площадей, но стройка дороже.
+      Коммерческие площади (первые этажи жилых домов, ЖК с галереей, торговые центры) сдаются за м². Отдел магазина или ресторана занимает 60 м² на 1-м уровне
+      и до 720 м² на 7-м (это максимум) — выбирайте помещение с запасом. Число отделов не ограничено.</p>
       <h3>Кто строит</h3><p>Строительная компания-подрядчик: дороже или дешевле, быстрее или медленнее, с разным качеством.
       Или <b>своими силами</b>: создайте «Строительную компанию» в меню «Предприятия», закупите стройматериалы на складах или производите их сами — тогда здание обойдётся намного дешевле.</p>
       <h3>Производство и цепочки</h3><p>Фермы, шахты, заводы, склады и лаборатории — виртуальные предприятия, они не занимают места в городе. Цепочки как в жизни:

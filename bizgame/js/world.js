@@ -103,24 +103,44 @@ function makeOffice(b, tex) {
 function makeResidential(b, tex) {
   const g = new THREE.Group(), wins = [];
   const col = ownerColor(b);
-  const w = 7.6, d = 6, ground = 3.2;
-  const upper = b.floors - 1, h = ground + upper * FLOOR;
+  const cf = b.type === 'mixed' ? 2 : 1; // этажей под торговлю
+  const w = 7.6, d = 6, ground = 3.2 * cf;
+  const upper = b.floors - cf, h = ground + upper * FLOOR;
   // первый этаж — коммерция: витрины, маркизы, вывески
   g.add(box(w, ground, d, '#e2e8f0', 0, 0, 0));
   const shopColors = ['#ef4444', '#22c55e', '#f59e0b', '#06b6d4'];
-  const n = b.units.comm?.total || 3;
+  const n = Math.max(2, Math.min(5, Math.round((b.units.comm?.total || 360) / cf / 110)));
   const sw = w / n;
-  for (let k = 0; k < n; k++) {
-    const x = -w / 2 + sw * (k + 0.5);
-    g.add(box(sw - 0.5, 2, 0.12, mat('#7dd3fc', { roughness: 0.15, metalness: 0.3 }), x, 0.3, d / 2 + 0.02));
-    const aw = box(sw - 0.3, 0.12, 1.1, shopColors[k % 4], x, 2.45, d / 2 + 0.55); aw.rotation.x = 0.3; g.add(aw);
-    g.add(box(sw - 0.8, 0.45, 0.1, signMat(shopColors[k % 4]), x, 2.7, d / 2 + 0.06));
+  for (let f = 0; f < cf; f++) for (let k = 0; k < n; k++) {
+    const x = -w / 2 + sw * (k + 0.5), y = f * 3.2;
+    g.add(box(sw - 0.5, 2, 0.12, mat('#7dd3fc', { roughness: 0.15, metalness: 0.3 }), x, 0.3 + y, d / 2 + 0.02));
+    const aw = box(sw - 0.3, 0.12, 1.1, shopColors[(k + f) % 4], x, 2.45 + y, d / 2 + 0.55); aw.rotation.x = 0.3; g.add(aw);
+    g.add(box(sw - 0.8, 0.45, 0.1, signMat(shopColors[(k + f) % 4]), x, 2.7 + y, d / 2 + 0.06));
   }
   const m = windowMat(tex, w, upper);
   g.add(box(w, upper * FLOOR, d, m, 0, ground, 0)); wins.push(m);
   for (let f = 0; f < upper; f += 2) g.add(box(w * 0.7, 0.18, 0.7, '#cbd5e1', 0, ground + f * FLOOR + 0.1, d / 2 + 0.35));
   g.add(box(w + 0.3, 0.4, d + 0.3, col, 0, h, 0));
   g.add(box(1.4, 1.6, 1.4, '#a8a29e', -2, h + 0.4, -1));
+  return { g, wins };
+}
+
+// Торговый центр: широкая стеклянная коробка с вывесками и парковкой
+function makeMall(b, tex) {
+  const g = new THREE.Group(), wins = [];
+  const col = ownerColor(b), h = b.floors * 3.6, w = 8.6, d = 7.4;
+  const m = windowMat(tex, w, b.floors, { metalness: 0.5 });
+  g.add(box(w, h, d - 2, m, 0, 0.3, -1)); wins.push(m);
+  g.add(box(w, h, 0.15, mat('#7dd3fc', { roughness: 0.1, metalness: 0.4, transparent: true, opacity: 0.85 }), 0, 0.3, d / 2 - 2.05));
+  for (let f = 0; f < b.floors; f++) g.add(box(w + 0.1, 0.25, d - 1.9, '#e2e8f0', 0, 0.3 + f * 3.6, -1));
+  g.add(box(w + 0.3, 0.5, d - 1.7, col, 0, 0.3 + h, -1));
+  const colors = ['#ef4444', '#22c55e', '#f59e0b', '#06b6d4', '#a855f7'];
+  for (let k = 0; k < 4; k++) g.add(box(1.5, 0.6, 0.12, signMat(colors[(k + b.id) % 5]), -3.1 + k * 2.07, 0.3 + h - 1, d / 2 - 1.9));
+  g.add(box(3.2, 1.2, 0.2, signMat(col), 0, 0.3 + h + 0.8, d / 2 - 2.6));
+  // парковка
+  g.add(box(w, 0.06, 2, '#475569', 0, 0, d / 2));
+  for (let k = 0; k < 5; k++) g.add(box(0.08, 0.02, 1.6, '#f8fafc', -3.6 + k * 1.8, 0.07, d / 2));
+  g.add(box(1.4, 0.6, 0.8, '#ef4444', -2.7, 0.06, d / 2), box(1.4, 0.6, 0.8, '#3b82f6', 0.9, 0.06, d / 2));
   return { g, wins };
 }
 
@@ -188,7 +208,10 @@ function makeSchool(b, tex) {
 
 // ---------- стройплощадка ----------
 function totalHeight(b) {
-  return b.type === 'residential' ? 3.2 + (b.floors - 1) * FLOOR : b.floors * FLOOR;
+  if (b.type === 'residential') return 3.2 + (b.floors - 1) * FLOOR;
+  if (b.type === 'mixed') return 6.4 + (b.floors - 2) * FLOOR;
+  if (b.type === 'mall') return b.floors * 3.6;
+  return b.floors * FLOOR;
 }
 
 function makeSite(b) {
@@ -390,16 +413,19 @@ export class World {
       let g, extra = {};
       if (b.state === 'build') g = makeSite(b);
       else {
-        const make = { office: makeOffice, residential: makeResidential, hospital: makeHospital, police: makePolice, school: makeSchool }[b.type];
-        const r = make(b, this.tex[b.type]);
+        const make = { office: makeOffice, residential: makeResidential, hospital: makeHospital, police: makePolice, school: makeSchool, mixed: makeResidential, mall: makeMall }[b.type];
+        const r = make(b, this.tex[{ mixed: 'residential', mall: 'office' }[b.type] || b.type]);
         g = r.g; extra = { wins: r.wins, blink: r.blink };
         if (b.owner === 'player' && b.type !== 'police' && b.type !== 'school') g.add(flag(PLAYER_COLOR, -4.2, 4.2, 5));
       }
       const pos = toWorld(b.i, b.j);
       g.position.set(pos.x, 0.4, pos.z);
+      // на малом участке здание уже, на крупном — шире
+      const fk = b.type === 'hospital' || b.type === 'police' || b.type === 'school' ? 1 : ({ s: 0.85, m: 1, l: 1.15 }[state.plots[`${b.i},${b.j}`]?.size] || 1);
+      g.userData.fk = fk;
       const fresh = !cur || cur.userData.state !== b.state;
       g.userData = { ...g.userData, ...extra, sig, occ, state: b.state, born: fresh ? performance.now() : 0, id: b.id };
-      if (fresh) g.scale.setScalar(0.01);
+      if (fresh) g.scale.setScalar(0.01); else g.scale.set(g.userData.fk, 1, g.userData.fk);
       this.scene.add(g);
       this.bObjs.set(b.id, g);
     }
@@ -550,8 +576,9 @@ export class World {
       const u = g.userData;
       if (u.born) {
         const age = (now - u.born) / 700;
-        if (age < 1) { const k = 1 - Math.pow(1 - age, 3); g.scale.set(k, k * (1 + Math.sin(age * Math.PI) * 0.15), k); }
-        else { g.scale.setScalar(1); u.born = 0; }
+        const fk = u.fk || 1;
+        if (age < 1) { const k = 1 - Math.pow(1 - age, 3); g.scale.set(k * fk, k * (1 + Math.sin(age * Math.PI) * 0.15), k * fk); }
+        else { g.scale.set(fk, 1, fk); u.born = 0; }
       }
       if (u.crane) u.crane.rotation.y = Math.sin(now / 2500 + u.id) * 1.4;
       if (u.blink) { const on = Math.floor(now / 350) % 2; u.blink[0].emissiveIntensity = on ? 2 : 0.1; u.blink[1].emissiveIntensity = on ? 0.1 : 2; }

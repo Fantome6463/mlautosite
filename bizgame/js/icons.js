@@ -121,7 +121,8 @@ export const entTile = (type, sub = null, size = '', title = '') =>
   `<span class="ti ${size}" style="--c:${entColor(type)}"${title ? ` title="${title}"` : ''}>${ic(entGlyph(type, sub))}</span>`;
 export const eTile = (e, size = '', title = '') => entTile(e.type, e.sub, size, title);
 
-const BLD = { office: ['building', '#2563eb'], residential: ['home', '#0d9488'], hospital: ['hospital', '#dc2626'], police: ['shield', '#1d4ed8'], school: ['school', '#d97706'], site: ['crane', '#f59e0b'] };
+const BLD = { office: ['building', '#2563eb'], residential: ['home', '#0d9488'], hospital: ['hospital', '#dc2626'], police: ['shield', '#1d4ed8'], school: ['school', '#d97706'], site: ['crane', '#f59e0b'],
+  mixed: ['city', '#0891b2'], mall: ['store', '#db2777'] };
 export const bGlyph = type => (BLD[type] || BLD.office)[0];
 export const bTile = (type, size = '', title = '') => `<span class="ti ${size}" style="--c:${(BLD[type] || BLD.office)[1]}"${title ? ` title="${title}"` : ''}>${ic(bGlyph(type))}</span>`;
 export const unitIc = t => ic({ apt: 'home', office: 'briefcase', comm: 'bag' }[t] || 'box');
