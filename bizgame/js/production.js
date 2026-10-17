@@ -74,6 +74,11 @@ export function offers(s, g, e = null) {
     list.push({ src: 'depot', name: 'Склады города', price: buyPrice(s, g), q: MARKET_QUALITY, avail: Math.floor(s.depot[g] || 0) });
     RIVALS.forEach((r, i) => { if (npcSells(g, i)) list.push({ src: 'npc' + i, name: r.name, price: npcPrice(s, g, i), q: npcQuality(g, i), avail: Math.floor(s.npc?.[g]?.[i] || 0) }); });
   }
+  // свой цех: другое подразделение этого же предприятия делает товар — берётся прямо со своего склада
+  if (e && makesHere(e, g)) {
+    const st = e.stock[g];
+    list.push({ src: e.id, name: 'Свой цех', price: round1(st?.c || s.prices[g] * 0.6), q: st?.q || 0, avail: Math.floor(ownOutput(s, e, g) + stockQty(e, g)), own: true, self: true });
+  }
   for (const x of Object.values(s.enterprises)) {
     if (x === e || !(stockQty(x, g) > 0 || x.divs.some(d => d.recipe === g))) continue;
     const st = x.stock[g];
@@ -81,9 +86,13 @@ export function offers(s, g, e = null) {
   }
   return list;
 }
+export const makesHere = (e, g) => e.divs.some(d => d.recipe === g);
+// Сколько товара g за день делают цеха самого предприятия
+export const ownOutput = (s, e, g) => e.divs.reduce((a, d) => a + (d.recipe === g && d.on ? divInfo(s, e, d).out : 0), 0);
 export const offerOf = (s, g, src, e) => offers(s, g, e).find(o => String(o.src) === String(src)) || null;
 // Поставщик по умолчанию: своё предприятие, если оно делает этот товар, иначе склады города
 export function defaultSrc(s, g, e) {
+  if (e && makesHere(e, g)) return e.id;
   const own = Object.values(s.enterprises).find(x => x !== e && x.divs.some(d => d.recipe === g));
   return own ? own.id : inDepot(g) ? 'depot' : null;
 }
@@ -93,7 +102,7 @@ const normSrc = src => (typeof src === 'string' && /^\d+$/.test(src) ? +src : sr
 function checkSrc(s, e, g, src) {
   if (!GOODS[g] || !accepts(e, g)) return `${entDef(e).name} не принимает «${GOODS[g]?.name}»`;
   if (src == null) return 'Этот товар негде взять — его нужно производить';
-  if (src === e.id) return 'Нельзя поставлять самому себе';
+  if (src === e.id && !makesHere(e, g)) return 'Это предприятие не производит этот товар';
   if (typeof src === 'number' && !s.enterprises[src]) return 'Предприятие не найдено';
   return null;
 }
@@ -137,7 +146,7 @@ export function removeSupply(s, e, g) { delete e.supply[g]; }
 function retargetSupplier(s, from, to) {
   for (const x of Object.values(s.enterprises)) for (const g in x.supply || {}) {
     const sp = x.supply[g];
-    sp.srcs = [...new Set(sp.srcs.map(v => (v === from ? (to === x.id ? null : to ?? (inDepot(g) ? 'depot' : null)) : v)).filter(v => v != null))];
+    sp.srcs = [...new Set(sp.srcs.map(v => (v === from ? (to === x.id && !makesHere(x, g) ? null : to ?? (inDepot(g) ? 'depot' : null)) : v)).filter(v => v != null))];
     if (!sp.srcs.length) delete x.supply[g];
   }
 }
@@ -753,6 +762,11 @@ export function productionTick(s, { spend, earn, fx, news }) {
     // поставщики по очереди: что не добрали у первого — берём у следующего
     for (const src of sp.srcs) {
       if (want <= 0) break;
+      if (src === e.id) {
+        // свой цех: товар уже на своём складе или будет сделан сегодня — ничего не везём и не покупаем
+        want -= ownOutput(s, e, g) + stockQty(e, g);
+        continue;
+      }
       if (typeof src === 'number') {
         // своё предприятие: себестоимость едет вместе с товаром
         const A = s.enterprises[src];
@@ -782,7 +796,9 @@ export function productionTick(s, { spend, earn, fx, news }) {
   // производство по подразделениям (дробный выпуск копится: 0,3 автомобиля в день — машина за 3–4 дня)
   for (const e of list) {
     const def = entDef(e);
-    for (const d of e.divs) {
+    // сначала цеха полуфабрикатов: мука, сделанная утром, сразу идёт в хлебный цех
+    const feeds = d => e.divs.some(x => x !== d && RECIPES[x.recipe]?.inputs[d.recipe]);
+    for (const d of [...e.divs].sort((a, b) => feeds(b) - feeds(a))) {
       const r = RECIPES[d.recipe];
       if (!r || !d.on || !canMake(e, d.recipe)) continue;
       d.wear = Math.min(1, d.wear + wearPerDay(e));
@@ -1045,6 +1061,8 @@ export function migrateEnterprises(s) {
     if (!e.lvl) { e.lvl = Math.max(1, levelOf(e)); e.xp = 0; }
     e.aware ??= 0.5; e.ad ??= 0; e.resDir ||= 'q';
     for (const d of e.divs) { d.eq ??= 3; d.train ??= 0; d.trainOn ??= false; d.eqN ??= eqNeed(e, d); }
+    // свой цех теперь может быть поставщиком: ставим его первым там, где предприятие само делает сырьё
+    if (!e.selfSrc) { e.selfSrc = true; for (const g in e.supply || {}) { const sp = e.supply[g]; if (makesHere(e, g) && !sp.srcs.includes(e.id)) sp.srcs.unshift(e.id); } }
     // авторегулирование стало доступно всем — один раз включаем его в старых сохранениях
     if (!e.autoSupply?.v2) e.autoSupply = { on: true, days: e.autoSupply?.weeks ? Math.min(14, e.autoSupply.weeks * 7) : 5, v2: true };
     if (e.type === 'mine' && !e.sub) e.sub = { ore: 'ore', coal: 'coal', stone: 'stone', sand: 'sand', clay: 'clay', gold: 'gold' }[e.divs[0]?.recipe] || 'stone';

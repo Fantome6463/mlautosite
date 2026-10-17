@@ -495,13 +495,13 @@ export class UI {
   ep_supply(e, s) {
     const d = entDef(e), need = P.inputNeeds(s, e), fl = P.entFlow(e), auto = e.autoSupply?.on ? P.autoNeeds(s, e) : {};
     const goods = this.supplyGoods(e, s);
-    const typeOf = o => (o.own ? 'своё' : o.src === 'depot' ? 'склад' : 'конкурент');
+    const typeOf = o => (o.self ? 'без доставки' : o.own ? 'своё' : o.src === 'depot' ? 'склад' : 'конкурент');
     let total = 0;
     const rows = goods.map(g => {
       const sp = e.supply[g], st = e.stock[g], list = P.offers(s, g, e);
       const srcs = sp?.srcs || [];
       const first = srcs.length ? list.find(o => String(o.src) === String(srcs[0])) : null;
-      const sum = sp && first ? sp.qty * first.price : 0;
+      const sum = sp && first && !first.self ? sp.qty * first.price : 0;
       total += sum;
       const chips = srcs.map((src, i) => {
         const o = list.find(x => String(x.src) === String(src));
@@ -539,7 +539,7 @@ export class UI {
     const list = P.offers(s, g, e).slice();
     const key = { price: o => o.price, q: o => -o.q, avail: o => -o.avail }[dl.sort];
     list.sort((a, b) => key(a) - key(b));
-    const typeOf = o => (o.own ? '<span class="tag own">ваше</span>' : o.src === 'depot' ? '<span class="tag">склад города</span>' : '<span class="tag rival">конкурент</span>');
+    const typeOf = o => (o.self ? '<span class="tag own">свой цех</span>' : o.own ? '<span class="tag own">ваше</span>' : o.src === 'depot' ? '<span class="tag">склад города</span>' : '<span class="tag rival">конкурент</span>');
     m.hidden = false;
     m.innerHTML = `<div class="dlg" role="dialog"><div class="dlg-h"><h3>${dl.mode === 'replace' ? 'Заменить поставщика' : 'Добавить поставщика'}: ${gn(g)}</h3>
         <button class="btn icon" data-act="dlgclose" title="Закрыть">${ic('x')}</button></div>
@@ -548,7 +548,7 @@ export class UI {
         ${list.map(o => { const chosen = cur.some(x => String(x) === String(o.src));
           return `<tr class="${chosen ? 'me' : ''}"><td>${esc(o.name)} ${typeOf(o)}</td><td class="r">${fmt(o.price)}</td><td class="r">${o.q ? qBadge(o.q) : '—'}</td><td class="r ${o.avail <= 0 ? 'neg' : ''}">${qty(o.avail)}</td>
             <td class="r">${chosen ? '<span class="hint">выбран</span>' : `<button class="btn small primary" data-act="dlgpick" data-src="${o.src}">Выбрать</button>`}</td></tr>`; }).join('') || '<tr><td colspan="5" class="hint">Никто не продаёт этот товар</td></tr>'}</table></div>
-      <p class="hint">Склады города — среднее качество, запас ограничен. У конкурентов лучше качество стоит дороже. Свои предприятия отдают по себестоимости.</p></div>`;
+      <p class="hint">Склады города — среднее качество, запас ограничен. У конкурентов лучше качество стоит дороже. Свои предприятия отдают по себестоимости, свой цех — тоже, и без доставки.</p></div>`;
   }
 
   ep_sales(e, s) {
