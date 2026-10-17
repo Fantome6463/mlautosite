@@ -10,7 +10,7 @@ import {
 } from './production.js';
 import { initLedger, pay, closeDay, flow } from './ledger.js';
 
-const SAVE_KEY = 'bizgame-save-v2';
+const SAVE_KEY = 'bizgame-save-v3'; // v3 — реальные цены, старые сохранения несовместимы
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const round1 = v => Math.round(v * 10) / 10;
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
@@ -19,26 +19,26 @@ export const isPlayer = b => b.owner === 'player';
 const mine = s => Object.values(s.buildings).filter(isPlayer);
 
 export const QUESTS = [
-  { id: 'order',  text: 'Закажите строительство первого здания',  reward: 10000,  check: s => mine(s).length > 0 },
-  { id: 'built',  text: 'Дождитесь окончания стройки',             reward: 15000,  check: s => mine(s).some(b => b.state === 'done') },
-  { id: 'apt',    text: 'Заселите 20 квартир',                     reward: 20000,  check: s => occTotal(mine(s), 'apt') >= 20 },
-  { id: 'office', text: 'Сдайте 15 офисов',                        reward: 25000,  check: s => occTotal(mine(s), 'office') >= 15 },
-  { id: 'ent',    text: 'Создайте предприятие (ферму, завод…)',    reward: 10000,  check: s => Object.keys(s.enterprises).length > 0 },
-  { id: 'chain',  text: 'Настройте поставку между предприятиями', reward: 10000,  check: s => s.contracts.length > 0 },
-  { id: 'shop',   text: 'Откройте магазин в жилом доме',          reward: 15000,  check: s => Object.values(s.enterprises).some(e => e.type === 'shop') },
-  { id: 'sale',   text: 'Продайте товаров на 5 000 ₽ за день',      reward: 20000,  check: s => s.lastShopRevenue >= 5000 },
-  { id: 'social', text: 'Постройте больницу или полицию',          reward: 30000,  check: s => mine(s).some(b => b.state === 'done' && BUILDINGS[b.type].category === 'social') },
-  { id: 'worth',  text: 'Капитал компании 1 000 000 ₽',             reward: 50000,  check: s => netWorth(s) >= 1000000 },
-  { id: 'top',    text: 'Займите 1-е место в рейтинге',             reward: 100000, check: s => rating(s)[0].player },
+  { id: 'order',  text: 'Закажите строительство первого здания',  reward: 200000,  check: s => mine(s).length > 0 },
+  { id: 'built',  text: 'Дождитесь окончания стройки',             reward: 300000,  check: s => mine(s).some(b => b.state === 'done') },
+  { id: 'apt',    text: 'Заселите 20 квартир',                     reward: 400000,  check: s => occTotal(mine(s), 'apt') >= 20 },
+  { id: 'office', text: 'Сдайте 15 офисов',                        reward: 500000,  check: s => occTotal(mine(s), 'office') >= 15 },
+  { id: 'ent',    text: 'Создайте предприятие (ферму, завод…)',    reward: 200000,  check: s => Object.keys(s.enterprises).length > 0 },
+  { id: 'chain',  text: 'Выберите своё предприятие поставщиком',   reward: 200000,  check: s => Object.values(s.enterprises).some(e => Object.values(e.supply || {}).some(v => typeof v.src === 'number')) },
+  { id: 'shop',   text: 'Откройте магазин в жилом доме',          reward: 300000,  check: s => Object.values(s.enterprises).some(e => e.type === 'shop') },
+  { id: 'sale',   text: 'Продайте товаров на 100 000 ₽ за день',    reward: 400000,  check: s => s.lastShopRevenue >= 100000 },
+  { id: 'social', text: 'Постройте больницу, полицию или школу',   reward: 600000,  check: s => mine(s).some(b => b.state === 'done' && BUILDINGS[b.type].category === 'social') },
+  { id: 'worth',  text: 'Капитал компании 30 000 000 ₽',            reward: 1000000, check: s => netWorth(s) >= 30000000 },
+  { id: 'top',    text: 'Займите 1-е место в рейтинге',             reward: 2000000, check: s => rating(s)[0].player },
 ];
 const occTotal = (list, t) => list.reduce((a, b) => a + (b.units[t]?.occ || 0), 0);
 
 export function newGame() {
   const s = {
-    version: 2, day: 1, money: START_MONEY, loan: 0, nextId: 1, debtDays: 0, bankrupt: false,
+    version: 3, day: 1, money: START_MONEY, loan: 0, nextId: 1, debtDays: 0, bankrupt: false,
     mods: {}, plots: {}, buildings: {}, history: [], news: [], quests: {},
     city: { households: 0, jobs: 0, demand: { apt: 0, office: 0, comm: 0 } },
-    rivals: RIVALS.map(r => ({ ...r, worth: 200000 + Math.random() * 150000 })),
+    rivals: RIVALS.map(r => ({ ...r, worth: 5000000 + Math.random() * 3000000 })),
     company: 'Моя компания', cityName: 'Новоград',
     hq: { staff: 1, manage: 1, prod: 1, build: 1, finance: 1, mining: 1 },
     accNo: 100000 + Math.floor(Math.random() * 900000), compLvl: 1, compXp: 0,
@@ -49,7 +49,7 @@ export function newGame() {
     const central = 1 - Math.hypot(i - c, j - c) / Math.hypot(c, c); // 1 в центре, 0 в углу
     s.plots[key(i, j)] = {
       i, j,
-      price: Math.round((8000 + central * central * 70000) / 500) * 500,
+      price: Math.round((160000 + central * central * 1400000) / 10000) * 10000,
       loc: round1(0.6 + central * 1.1),
     };
   }
@@ -70,13 +70,12 @@ export function load() {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw);
-    if (!s || s.version !== 2) return null;
+    if (!s || s.version !== 3) return null;
     s.hq ||= { staff: 1, manage: 1, prod: 1, build: 1 };
     s.cityName ||= 'Новоград';
     s.accNo ||= 100000 + Math.floor(Math.random() * 900000);
     s.hq.finance ||= 1; s.hq.mining ||= 1;
     // раньше уровень компании считался по капиталу — переносим его как стартовый
-    if (!s.compLvl) { s.compLvl = Math.max(1, Math.floor(Math.log2(Math.max(1, netWorth(s)) / 125000)) + 1); s.compXp = 0; }
     initLedger(s);
     s.specs ||= []; s.candidates ||= [];
     migrateEnterprises(s);
@@ -84,7 +83,7 @@ export function load() {
   } catch { return null; }
 }
 export function wipeSave() {
-  try { localStorage.removeItem(SAVE_KEY); localStorage.removeItem('bizgame-save-v1'); } catch { /* нет доступа */ }
+  try { localStorage.removeItem(SAVE_KEY); localStorage.removeItem('bizgame-save-v2'); localStorage.removeItem('bizgame-save-v1'); } catch { /* нет доступа */ }
 }
 
 // ---------- стройка ----------
@@ -114,11 +113,11 @@ export function quote(s, type, floors, contractor) {
   if (contractor === 'own') {
     const materials = materialsFor(type, floors);
     const cost = Object.entries(materials).reduce((a, [g, n]) => a + n * s.prices[g], 0);
-    return { cost: Math.round(cost / 500) * 500, days: Math.max(3, Math.round(d.days(floors))), quality: OWN.quality, own: true, materials };
+    return { cost: Math.round(cost / 1000) * 1000, days: Math.max(3, Math.round(d.days(floors))), quality: OWN.quality, own: true, materials };
   }
   const c = CONTRACTORS[contractor];
   return {
-    cost: Math.round(d.cost(floors) * c.price * mod(s, 'build') / 500) * 500,
+    cost: Math.round(d.cost(floors) * c.price * mod(s, 'build') / 10000) * 10000,
     days: Math.max(3, Math.round(d.days(floors) * c.speed)),
     quality: c.quality,
   };
@@ -221,7 +220,7 @@ export function attract(s, b, t) {
 }
 
 // ---------- финансы ----------
-export const maxLoan = s => Math.max(0, Math.round((netWorth(s) * 0.5 - s.loan) / 1000) * 1000);
+export const maxLoan = s => Math.max(0, Math.round((netWorth(s) * 0.5 - s.loan) / 100000) * 100000);
 export function takeLoan(s, amount) {
   amount = Math.min(amount, maxLoan(s));
   if (amount <= 0) return { error: 'Банк отказал: недостаточно капитала' };
@@ -340,7 +339,7 @@ export function tick(s) {
       pay(s, -(expense - tax), 'estate', { party: 'Коммунальные службы', from, type: 'Содержание здания' });
       pay(s, -tax, 'tax', { party: 'Налоговая служба', from, type: 'Налог на землю' });
       (b.hist ||= []).push({ rev: income, exp: expense });
-      s.compXpGain = (s.compXpGain || 0) + income * 0.2; // недвижимость тоже даёт компании опыт
+      s.compXpGain = (s.compXpGain || 0) + income; // недвижимость тоже даёт компании опыт
       if (b.hist.length > 60) b.hist.shift();
       if (income > 0) fx.push({ type: 'money', id: b.id, amount: income - expense });
     } else {
@@ -515,8 +514,9 @@ export function upgradeHQ(s, k) {
 }
 
 export function fmt(v) {
-  const sign = v < 0 ? '−' : '';
-  return sign + Math.round(Math.abs(v)).toLocaleString('ru-RU') + ' ₽';
+  const sign = v < 0 ? '−' : '', a = Math.abs(v);
+  // мелкие цены — с копейками (яйца, кирпич, маски)
+  return sign + (a > 0 && a < 100 ? (Math.round(a * 10) / 10).toLocaleString('ru-RU') : Math.round(a).toLocaleString('ru-RU')) + ' ₽';
 }
 
 export { CATEGORIES };

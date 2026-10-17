@@ -2,9 +2,9 @@
 // На карте их нет — кроме тех, кто продаёт горожанам: они занимают коммерческое помещение жилого дома.
 // У каждого предприятия есть подразделения (цеха, залы, теплицы…): свой уровень, рабочие, продукт и износ.
 import {
-  GOODS, RECIPES, ENTERPRISES, MARKET_SALARY, IMPORT_MARKUP, WHOLESALE_RATE, NPC_QUALITY,
-  SHOP_UNITS_PER_WORKER, TRANSPORT_PER_UNIT, DEPOT, hqLimit, PROFESSIONS, SPEC_NAMES, SPEC_FACES, specSalary,
-  EQUIP, GAME_YEAR, FEATURES, AUTO_SUPPLY_ENT_LEVEL, TENANT_PROFILE,
+  GOODS, RECIPES, ENTERPRISES, MARKET_SALARY, BUY_RATE, SELL_RATE, NPC_QUALITY, MARKET_QUALITY, retailMul,
+  SHOP_TURNOVER_PER_WORKER, TRANSPORT_RATE, POP_SCALE, depotOf, hqLimit, PROFESSIONS, SPEC_NAMES, SPEC_FACES, specSalary,
+  EQUIP, GAME_YEAR, FEATURES, AUTO_SUPPLY_ENT_LEVEL, TENANT_PROFILE, RIVALS,
 } from './data.js';
 import { entDef, canMake, recipesFor, sellsList, accepts } from './catalog.js';
 import { pay as ledgerPay, flow } from './ledger.js';
@@ -18,7 +18,7 @@ export const MAX_DIV_LEVEL = 100;
 // Уровни подразделений расходуют уровни предприятия: новое подразделение или улучшение — только при свободном уровне.
 export const ENT_MAX_LEVEL = 100;
 export const XP_FREE_CAP = 5;
-export const xpNeed = lvl => Math.round(20000 * Math.pow(lvl, 1.6));
+export const xpNeed = lvl => Math.round(2000000 * Math.pow(lvl, 1.6));
 
 // Названия подразделений по видам предприятий
 const DIV_NAMES = {
@@ -32,7 +32,7 @@ export function initProduction(s) {
   s.prices = {}; s.priceMods = {}; s.demandMods = {}; s.tech = {};
   s.depot = {};
   s.enterprises = {};
-  s.contracts = [];
+  s.contracts = [];   // старый формат поставок — теперь поставщик выбирается в снабжении (e.supply)
   s.lastShopRevenue = 0;
   ensureGoods(s);
 }
@@ -45,11 +45,54 @@ export function ensureGoods(s) {
     s.tech[g] ??= 0;
     s.depot[g] ??= depotStart(g);
   }
+  s.npc ||= {};
+  for (const g in GOODS) if (inDepot(g)) s.npc[g] ||= RIVALS.map((_, i) => (npcSells(g, i) ? npcStart(g) : 0));
 }
 
 // Универсальные склады: стартовый запас (блюд и услуг там нет)
-export const depotStart = g => DEPOT[GOODS[g].kind]?.start || 0;
-export const inDepot = g => !!DEPOT[GOODS[g].kind];
+export const depotStart = g => depotOf(g)?.start || 0;
+export const inDepot = g => !!depotOf(g);
+
+// ---------- поставщики: склады города, конкуренты, свои предприятия ----------
+// У каждого конкурента свой ассортимент, качество и цена (лучше качество — дороже)
+const hash = (g, i) => { let h = i * 7919; for (const c of g) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h; };
+export const npcSells = (g, i) => hash(g, i) % 3 !== 0;
+export const npcQuality = (g, i) => 2 + (hash(g, i + 11) % 50) / 10;          // 2.0 … 6.9
+const npcStart = g => Math.round((RECIPES[g]?.rate || 1) * 8);
+const npcRestock = g => Math.max(0.2, (RECIPES[g]?.rate || 1) * 0.8);
+export const npcPrice = (s, g, i) => round1(s.prices[g] * BUY_RATE * (0.82 + 0.08 * npcQuality(g, i)));
+// Все предложения товара g для предприятия e: { src, name, price, q, avail, own }
+export function offers(s, g, e = null) {
+  const list = [];
+  if (inDepot(g)) {
+    list.push({ src: 'depot', name: 'Склады города', price: buyPrice(s, g), q: MARKET_QUALITY, avail: Math.floor(s.depot[g] || 0) });
+    RIVALS.forEach((r, i) => { if (npcSells(g, i)) list.push({ src: 'npc' + i, name: r.name, price: npcPrice(s, g, i), q: npcQuality(g, i), avail: Math.floor(s.npc?.[g]?.[i] || 0) }); });
+  }
+  for (const x of Object.values(s.enterprises)) {
+    if (x === e || !(stockQty(x, g) > 0 || x.divs.some(d => d.recipe === g))) continue;
+    const st = x.stock[g];
+    list.push({ src: x.id, name: x.name, price: round1((st?.c || s.prices[g] * 0.6) + s.prices[g] * TRANSPORT_RATE), q: st?.q || 0, avail: Math.floor(stockQty(x, g)), own: true });
+  }
+  return list;
+}
+export const offerOf = (s, g, src, e) => offers(s, g, e).find(o => String(o.src) === String(src)) || null;
+// Поставщик по умолчанию: своё предприятие, если оно делает этот товар, иначе склады города
+export function defaultSrc(s, g, e) {
+  const own = Object.values(s.enterprises).find(x => x !== e && x.divs.some(d => d.recipe === g));
+  return own ? own.id : inDepot(g) ? 'depot' : null;
+}
+export function setSupply(s, e, g, src, qty) {
+  if (!GOODS[g] || !accepts(e, g)) return { error: `${entDef(e).name} не принимает «${GOODS[g]?.name}»` };
+  if (src == null || src === '') src = defaultSrc(s, g, e);
+  if (src == null) return { error: 'Этот товар негде взять — его нужно производить' };
+  if (typeof src === 'string' && /^\d+$/.test(src)) src = +src;
+  if (src === e.id) return { error: 'Нельзя поставлять самому себе' };
+  e.supply[g] = { src, qty: Math.max(0, Math.round(qty ?? e.supply[g]?.qty ?? 0)) };
+  return { ok: true };
+}
+export function removeSupply(s, e, g) { delete e.supply[g]; }
+// Кому предприятие поставляет (по снабжению получателей)
+export const consumersOf = (s, e) => Object.values(s.enterprises).flatMap(x => Object.entries(x.supply || {}).filter(([, v]) => v.src === e.id).map(([g, v]) => ({ to: x, g, qty: v.qty })));
 
 // ---------- подразделения и персонал ----------
 export const workersOf = e => e.divs.reduce((a, d) => a + d.workers, 0);
@@ -73,7 +116,16 @@ function gainXp(s, e, v, news) {
   }
   if (e.lvl >= ENT_MAX_LEVEL) e.xp = 0;
 }
-export const capacity = e => (entDef(e).storage || 0) * Math.max(1, levelOf(e));
+// Склад: у торговли и складов — фиксированный объём, у производства — на 15 дней сырья и продукции
+export function capacity(e) {
+  const base = entDef(e).storage || 0;
+  let v = 0;
+  for (const d of e.divs) {
+    const r = RECIPES[d.recipe];
+    v += Math.max(base, r ? 15 * r.rate * (1 + Object.values(r.inputs).reduce((a, n) => a + n, 0)) : base) * d.level;
+  }
+  return Math.max(v, base);
+}
 export const wearOf = e => (e.divs.length ? e.divs.reduce((a, d) => a + d.wear, 0) / e.divs.length : 0);
 
 // ---------- запасы (q — качество, c — себестоимость единицы) ----------
@@ -139,29 +191,46 @@ const newDiv = (s, e, recipe) => {
   return d;
 };
 
-// ---------- оборудование в штуках: станки, линии, тракторы… (вики «Оборудование», «Износ оборудования») ----------
-export const equipOf = e => EQUIP[e.type] || null;
+// ---------- оборудование в штуках: линии, тракторы, краны… — это товар, его покупают у поставщиков или делают сами ----------
+export const equipOf = e => { const E = EQUIP[e.type]; return E ? { ...E, name: GOODS[E.good].name, icon: GOODS[E.good].icon } : null; };
 export const eqNeed = (e, d) => (equipOf(e) ? Math.ceil(divMax(e, d) / equipOf(e).per) : 0);
 export const eqFill = (e, d) => { const n = eqNeed(e, d); return n ? Math.min(1, (d.eqN ?? n) / n) : 1; };
 export const wearPerDay = e => (equipOf(e) ? 1 / (equipOf(e).life * GAME_YEAR) : 0);
-// Цена единицы оборудования качества eq
-export const unitPrice = (e, eq) => {
+export const unitPrice = (s, e) => (equipOf(e) ? Math.round(s.prices[equipOf(e).good] * BUY_RATE) : 0);
+// Купить оборудование у поставщика src: mode 'fill' — докупить недостающее, 'replace' — заменить весь комплект
+export function buyEquipment(s, e, d, src, mode = 'fill') {
   const E = equipOf(e);
-  if (!E) return 0;
-  const unitsL1 = Math.ceil(entDef(e).workers / E.per);
-  return Math.round((entDef(e).cost * 0.15 / unitsL1) * (eq / 3));
-};
-// Докупить недостающее оборудование (того же качества)
-export function fillEquipment(s, e, d) {
-  const miss = Math.max(0, eqNeed(e, d) - (d.eqN || 0));
-  if (!miss) return { ok: true };
-  const cost = miss * unitPrice(e, d.eq || 3);
-  if (s.money < cost) return { error: `Нужно ${cost.toLocaleString('ru-RU')} ₽` };
-  ledgerPay(s, -cost, 'equipment', { party: 'Универсальные склады', from: e.name, type: `${equipOf(e).name} ×${miss}` });
-  e.invested += Math.round(cost * 0.5);
-  d.wear = ((d.eqN || 0) * d.wear) / ((d.eqN || 0) + miss); // новое без износа — износ смешивается
-  d.eqN = (d.eqN || 0) + miss;
-  return { ok: true };
+  if (!E) return { error: 'Здесь оборудование не нужно' };
+  const o = offerOf(s, E.good, src, e);
+  if (!o) return { error: 'Поставщик не найден' };
+  const need = eqNeed(e, d), have = mode === 'replace' ? 0 : (d.eqN || 0);
+  const n = Math.min(Math.max(0, need - have), o.avail);
+  if (n <= 0) return { error: o.avail <= 0 ? 'У поставщика нет в наличии' : 'Оборудования достаточно' };
+  const cost = Math.round(n * o.price);
+  if (!o.own && s.money < cost) return { error: `Нужно ${cost.toLocaleString('ru-RU')} ₽` };
+  let q = o.q;
+  if (o.own) {
+    const x = s.enterprises[o.src], t = takeStock(x, E.good, n);
+    q = t.q; efl(x, E.good, 'shipped', n);
+    ledgerPay(s, -Math.round(n * s.prices[E.good] * TRANSPORT_RATE), 'transport', { party: 'Транспортная компания', from: e.name, type: `Доставка: ${E.name} ×${n}` });
+  } else {
+    takeOffer(s, E.good, o.src, n);
+    ledgerPay(s, -cost, 'equipment', { party: o.name, from: e.name, type: `${E.name} ×${n}` });
+  }
+  e.invested += Math.round(n * s.prices[E.good] * 0.6);
+  if (mode === 'replace') { d.eq = round1(q); d.wear = 0; d.eqN = n; }
+  else {
+    const old = d.eqN || 0;
+    d.eq = round1(((d.eq || 3) * old + q * n) / (old + n));
+    d.wear = (old * d.wear) / (old + n); // новое без износа — износ смешивается
+    d.eqN = old + n;
+  }
+  return { ok: true, n };
+}
+// Забрать товар у склада города или конкурента
+function takeOffer(s, g, src, n) {
+  if (src === 'depot') s.depot[g] = Math.max(0, s.depot[g] - n);
+  else { const i = +String(src).slice(3); s.npc[g][i] = Math.max(0, s.npc[g][i] - n); }
 }
 
 // ---------- квалификация и оборудование (как в Бизмании) ----------
@@ -172,22 +241,10 @@ export const reqQual = d => Math.round((d.eq || 3) * 1.2 * 100) / 100;
 export const qualFactor = (s, d) => Math.pow(Math.min(1, qualOf(s, d) / reqQual(d)), 1.5);
 export const eqFactor = d => 0.7 + 0.1 * (d.eq || 3);
 export const trainCost = (e, d) => Math.round(d.workers * e.salary * 0.5); // ₽ в день, пока квалификация растёт
-// Заменить всё оборудование подразделения на новое качества eq
-export const equipCost = (e, d, eq) => eqNeed(e, d) * unitPrice(e, eq);
-export function replaceEquipment(s, e, d, eq) {
-  if (!equipOf(e)) return { error: 'Здесь оборудование не нужно' };
-  eq = clamp(Math.round(eq), 1, 10);
-  const cost = equipCost(e, d, eq);
-  if (s.money < cost) return { error: `Нужно ${cost.toLocaleString('ru-RU')} ₽` };
-  ledgerPay(s, -cost, 'equipment', { party: 'Универсальные склады', from: e.name, type: `${equipOf(e).name}: качество ${eq}` });
-  e.invested += Math.round(cost * 0.5);
-  d.eq = eq; d.wear = 0; d.eqN = eqNeed(e, d);
-  return { ok: true };
-}
 
 // ---------- реклама и известность (для магазинов, ресторанов, салонов) ----------
 export const AD_LEVELS = [0, 40, 50, 75, 100];
-export const adCost = (e, pctv) => Math.round(pctv * 4 * Math.max(1, levelOf(e)));
+export const adCost = (e, pctv) => Math.round(pctv * 400 * Math.max(1, levelOf(e)));
 // Известность = базовые 25% + реклама; радиус охвата: 50% → +20%, 100% → +50% к радиусу при 25% (вики «Известность и реклама»)
 export const BASE_AWARE = 0.25;
 export const shopRadius = e => 3 * (1 + 0.5 * clamp(((e.aware ?? BASE_AWARE) - BASE_AWARE) / (1 - BASE_AWARE), 0, 1));
@@ -216,12 +273,15 @@ export function availableGoods(e) {
   const d = entDef(e);
   if (!d.goods) return sellsList(e.type, e.sub);
   const top = Math.max(1, ...e.divs.map(x => x.level));
-  return d.goods.slice(0, 4 + 2 * (top - 1));
+  return d.goods.slice(0, 6 + 3 * (top - 1));
 }
-export const goodUnlockLevel = (e, g) => { const i = entDef(e).goods?.indexOf(g) ?? -1; return i < 4 ? 1 : Math.ceil((i - 3) / 2) + 1; };
-// Рекомендованная цена с учётом качества; дороже 2,5 средней по городу не покупают
-export const recommendedPrice = (s, g, q) => Math.max(1, Math.round(s.prices[g] * (0.85 + 0.05 * (q || 3))));
-export const PRICE_CAP = 2.5;
+export const goodUnlockLevel = (e, g) => { const i = entDef(e).goods?.indexOf(g) ?? -1; return i < 6 ? 1 : Math.ceil((i - 5) / 3) + 1; };
+// Средняя розничная цена в городе: оптовая × наценка группы
+export const retailRef = (s, g) => Math.round(s.prices[g] * retailMul(g) * 10) / 10;
+// Рекомендованная цена с учётом качества; дороже 2 средних розничных цен по городу не покупают
+export const recommendedPrice = (s, g, q) => Math.max(1, Math.round(retailRef(s, g) * (0.85 + 0.05 * (q || 3))));
+export const PRICE_CAP = 2;
+export const shopPrice = (s, e, g) => e.prices[g] ?? Math.round(retailRef(s, g));
 export const divCost = e => Math.round(entDef(e).cost * 0.6);
 export const divUpgradeCost = (e, d) => Math.round(entDef(e).cost * 0.5 * d.level);
 // Ремонт бесплатный: из изношенного оборудования собирается меньше целого (вики «Оборудование»)
@@ -259,12 +319,12 @@ export function createEnterprise(s, type, sub, opts = {}) {
   const count = Object.values(s.enterprises).filter(e => e.type === type && e.sub === (sub || null)).length + 1;
   const e = {
     id: s.nextId++, type, sub: sub || null, name: opts.name?.trim() || `${def.name} №${count}`, invested: def.cost,
-    salary: s.marketSalary, divs: [], stock: {}, buy: {}, autoSell: {}, prices: {}, autoSupply: { on: false, weeks: 1 },
+    salary: s.marketSalary, divs: [], stock: {}, supply: {}, autoSell: {}, prices: {}, autoSupply: { on: false, weeks: 1 },
     research: null, resDir: 'q', progress: 0, lvl: 1, xp: 0, ad: 0, aware: BASE_AWARE, built: s.day, host: host ? host.id : null, last: emptyLast(), hist: [], flh: [],
   };
   e.divs.push(newDiv(s, e, recipe));
   s.enterprises[e.id] = e;
-  ledgerPay(s, -def.cost, 'buyEnt', { party: host ? 'Владелец дома' : 'Универсальные склады', from: e.name, type: 'Создание предприятия' });
+  ledgerPay(s, -def.cost, 'buyEnt', { party: host ? 'Владелец дома' : 'Подрядчик', from: e.name, type: 'Создание предприятия' });
   return { enterprise: e };
 }
 
@@ -327,24 +387,15 @@ export function closeEnterprise(s, id) {
   const refund = stateBuyout(s, e);
   ledgerPay(s, refund, 'sellEnt', { party: 'Государство', from: e.name, type: 'Продажа предприятия государству' });
   for (const x of s.specs || []) if (x.job === id) x.job = null;
-  s.contracts = s.contracts.filter(c => c.from !== id && c.to !== id);
   delete s.enterprises[id];
+  // получатели переходят на склады города
+  for (const x of Object.values(s.enterprises)) for (const g in x.supply || {}) if (x.supply[g].src === id) x.supply[g].src = inDepot(g) ? 'depot' : null;
   return refund;
 }
 
-export function addContract(s, from, to, good, qty) {
-  if (from === to) return { error: 'Нельзя возить в то же предприятие' };
-  const A = s.enterprises[from], B = s.enterprises[to];
-  if (!A || !B) return { error: 'Предприятие не найдено' };
-  if (!accepts(B, good)) return { error: `${entDef(B).name} не принимает «${GOODS[good].name}»` };
-  s.contracts.push({ id: s.nextId++, from, to, good, qty: Math.max(1, Math.round(qty)) });
-  return { ok: true };
-}
-export function removeContract(s, id) { s.contracts = s.contracts.filter(c => c.id !== id); }
-
 // ---------- рынок товаров ----------
-export const buyPrice = (s, g) => round1(s.prices[g] * IMPORT_MARKUP);
-export const sellPrice = (s, g, q = NPC_QUALITY) => round1(s.prices[g] * WHOLESALE_RATE * (0.8 + 0.067 * q));
+export const buyPrice = (s, g) => round1(s.prices[g] * BUY_RATE);
+export const sellPrice = (s, g, q = NPC_QUALITY) => round1(s.prices[g] * SELL_RATE * (0.8 + 0.067 * q));
 
 export function sellToMarket(s, e, g, qty) {
   if (!inDepot(g)) return 0;
@@ -387,7 +438,7 @@ export function divInfo(s, e, d) {
     const can = stockQty(e, g) / (r.inputs[g] * matFactor(s, d.recipe));
     if (can < out) { out = can; limitBy = g; }
   }
-  return { maxOut: Math.floor(maxOut), out: Math.floor(out), limitBy };
+  return { maxOut: round2(maxOut), out: round2(out), limitBy };
 }
 // Потребность в сырье в день при полной загрузке всех подразделений
 // Авторегулирование снабжения (вики): с 7-го уровня компании для предприятий 8-го уровня и выше
@@ -432,46 +483,49 @@ export function productionTick(s, { spend, earn, fx, news }) {
     if (d.workers > d.target) d.workers = d.target;
   }
 
-  // авторегулирование снабжения: держать сырьё на N дней работы
+  // авторегулирование снабжения: держать сырьё на N недель работы
   for (const e of list) {
     if (!e.autoSupply?.on || !canAutoSupply(s, e)) continue;
     const days = (e.autoSupply.weeks || 1) * 7;
     const need = inputNeeds(s, e);
-    const incoming = {};
-    for (const c of s.contracts) if (c.to === e.id) incoming[c.good] = (incoming[c.good] || 0) + c.qty;
     for (const g in need) {
-      const want = need[g] * days - stockQty(e, g) - (incoming[g] || 0) * days;
-      e.buy[g] = Math.max(0, Math.ceil(Math.min(want, need[g] * 2)));
+      const want = need[g] * days - stockQty(e, g);
+      const qty = Math.max(0, Math.ceil(Math.min(Math.max(want / 3, need[g]), need[g] * 2)));
+      if (e.supply[g]) e.supply[g].qty = want > 0 ? qty : 0;
+      else setSupply(s, e, g, null, want > 0 ? qty : 0);
     }
   }
-  // закупки на универсальных складах
+  // снабжение: каждое утро привозят товар от выбранного поставщика
   const idle = e => e.type === 'construction' && !Object.values(s.buildings).some(b => b.builder === e.id && b.state === 'build');
-  for (const e of list) for (const g in e.buy) {
-    if (idle(e)) break; // без строек стройматериалы не закупаем
-    if (!inDepot(g) || !accepts(e, g)) continue;
-    const want = Math.min(e.buy[g], freeSpace(e));
+  for (const e of list) for (const g in e.supply) {
+    const sp = e.supply[g];
+    if (!sp || !(sp.qty > 0) || sp.src == null || idle(e) || !accepts(e, g)) continue;
+    const want = Math.min(sp.qty, freeSpace(e));
     if (want <= 0) continue;
-    const price = buyPrice(s, g);
-    const qty = Math.floor(Math.min(want, s.depot[g], Math.max(0, s.money) / price));
+    if (typeof sp.src === 'number') {
+      // своё предприятие: себестоимость едет вместе с товаром
+      const A = s.enterprises[sp.src];
+      if (!A) continue;
+      const qty = Math.floor(Math.min(want, stockQty(A, g)) * 1000) / 1000;
+      if (qty <= 0) continue;
+      const { q, c } = takeStock(A, g, qty);
+      const tr = s.prices[g] * TRANSPORT_RATE;
+      addStock(e, g, qty, q, c + tr);
+      efl(A, g, 'shipped', qty); efl(e, g, 'received', qty);
+      pay(A, Math.round(qty * tr), 'transport', 'Транспортная компания');
+      continue;
+    }
+    const o = offerOf(s, g, sp.src, e);
+    if (!o) continue;
+    const qty = Math.floor(Math.min(want, o.avail, Math.max(0, s.money) / o.price));
     if (qty <= 0) continue;
-    addStock(e, g, qty, 2, price);
-    s.depot[g] -= qty;
+    addStock(e, g, qty, o.q, o.price);
+    takeOffer(s, g, sp.src, qty);
     flow(s, g, 'bought', qty);
-    efl(e, g, 'bought', qty); efl(e, g, 'spent', qty * price);
-    pay(e, qty * price, 'purchase', 'Универсальные склады');
+    efl(e, g, 'bought', qty); efl(e, g, 'spent', qty * o.price);
+    pay(e, qty * o.price, 'purchase', o.name);
   }
-  // поставки между своими предприятиями (себестоимость едет вместе с товаром)
-  for (const c of s.contracts) {
-    const A = s.enterprises[c.from], B = s.enterprises[c.to];
-    if (!A || !B || !accepts(B, c.good)) continue;
-    const qty = Math.floor(Math.min(c.qty, stockQty(A, c.good), freeSpace(B)));
-    if (qty <= 0) continue;
-    const { q, c: cost } = takeStock(A, c.good, qty);
-    addStock(B, c.good, qty, q, cost + TRANSPORT_PER_UNIT);
-    efl(A, c.good, 'shipped', qty); efl(B, c.good, 'received', qty);
-    pay(A, Math.round(qty * TRANSPORT_PER_UNIT), 'transport', 'Транспортная компания');
-  }
-  // производство по подразделениям
+  // производство по подразделениям (дробный выпуск копится: 0,3 автомобиля в день — машина за 3–4 дня)
   for (const e of list) {
     const def = entDef(e);
     for (const d of e.divs) {
@@ -481,7 +535,6 @@ export function productionTick(s, { spend, earn, fx, news }) {
       let n = divInfo(s, e, d).out;
       const netGrow = 1 - Object.values(r.inputs).reduce((a, v) => a + v, 0);
       if (netGrow > 0) n = Math.min(n, freeSpace(e) / netGrow);
-      n = Math.floor(n);
       if (n <= 0) continue;
       let inQ = 0, inW = 0, inCost = 0;
       for (const g in r.inputs) {
@@ -490,13 +543,19 @@ export function productionTick(s, { spend, earn, fx, news }) {
         inQ += t.q * r.inputs[g]; inW += r.inputs[g]; inCost += t.c * use;
         flow(s, g, 'used', use); efl(e, g, 'used', use);
       }
+      d.acc = (d.acc || 0) + n;
+      const made = Math.floor(d.acc + 1e-9);
+      d.acc -= made;
       const bonus = (salaryEff(s, e) - 1) * 3 + specQuality(s, e) + ((d.eq || 3) - 3) * 0.3, tq = techQuality(s, d.recipe);
       const q = inW ? 0.6 * (inQ / inW) + 0.4 * tq + 0.5 + bonus : tq + bonus;
-      // себестоимость: сырьё + зарплата подразделения + доля содержания
-      const unitCost = (inCost + d.workers * e.salary + def.upkeep * d.level) / n;
-      addStock(e, d.recipe, n, round1(clamp(q, 1, 10)), unitCost);
-      e.last.produced[d.recipe] = (e.last.produced[d.recipe] || 0) + n;
-      flow(s, d.recipe, 'made', n); efl(e, d.recipe, 'made', n);
+      // себестоимость: сырьё + зарплата подразделения + доля содержания (копится до готовой единицы)
+      d.accCost = (d.accCost || 0) + inCost + d.workers * e.salary + def.upkeep * d.level;
+      if (made <= 0) continue;
+      const unitCost = d.accCost / (made + d.acc);
+      d.accCost -= unitCost * made;
+      addStock(e, d.recipe, made, round1(clamp(q, 1, 10)), unitCost);
+      e.last.produced[d.recipe] = (e.last.produced[d.recipe] || 0) + made;
+      flow(s, d.recipe, 'made', made); efl(e, d.recipe, 'made', made);
     }
   }
   // продажи горожанам: магазины, рестораны, салоны, автосервисы
@@ -509,27 +568,29 @@ export function productionTick(s, { spend, earn, fx, news }) {
     if (!host) continue;
     const area = catchment(s, host, shopRadius(e), profileOf(e), e.id);
     e.area = area;
-    const cap = workersOf(e) * SHOP_UNITS_PER_WORKER * salaryEff(s, e) * specBonus(s, e);
+    const cap = workersOf(e) * SHOP_TURNOVER_PER_WORKER * salaryEff(s, e) * specBonus(s, e); // ₽ в день
     const wants = {};
     let total = 0;
     for (const g of availableGoods(e)) {
       if (!e.stock[g]) continue;
       const gd = GOODS[g];
-      const price = e.prices[g] ?? gd.price;
-      if (price > s.prices[g] * PRICE_CAP) continue; // слишком дорого — не берут
-      const attr = Math.pow(e.stock[g].q / NPC_QUALITY, 0.6) * Math.pow(s.prices[g] / price, 2.5);
-      // спрос жителей в охвате на этот товар; делится с конкурентами того же профиля
-      const demand = ((gd.demand || 5) / 250) * area.pop * cityBonus * (s.demandMods[g]?.mult || 1) * (1 + 0.1 * (levelOf(e) - 1));
+      const price = shopPrice(s, e, g), ref = retailRef(s, g);
+      if (price > ref * PRICE_CAP) continue; // слишком дорого — не берут
+      const attr = Math.pow(e.stock[g].q / NPC_QUALITY, 0.6) * Math.pow(ref / price, 2.5);
+      // спрос покупателей в охвате (demand — на 100 человек в день); делится с конкурентами того же профиля
+      const people = area.pop * POP_SCALE * (def.reach || 1);
+      const demand = ((gd.demand || 0.05) / 100) * people * cityBonus * (s.demandMods[g]?.mult || 1) * (1 + 0.1 * (levelOf(e) - 1));
       wants[g] = Math.min(stockQty(e, g), demand * (attr / (attr + area.comp + 0.5)) * 1.5 * (0.9 + Math.random() * 0.2));
-      total += wants[g];
+      total += wants[g] * price;
     }
-    // у магазина пропускная способность — продавцы; у ресторанов и салонов — само производство
+    // у магазина пропускная способность — продавцы (оборот в ₽); у ресторанов и салонов — само производство
     const k = def.goods && total > cap ? cap / total : 1;
     for (const g in wants) {
-      const qty = Math.floor(wants[g] * k);
-      if (qty <= 0) continue;
+      let qty = wants[g] * k;
+      qty = qty >= 1 ? Math.floor(qty) : Math.random() < qty ? 1 : 0; // дорогие товары покупают не каждый день
+      if (qty <= 0 || qty > stockQty(e, g)) continue;
       takeStock(e, g, qty);
-      const sum = Math.round(qty * (e.prices[g] ?? GOODS[g].price));
+      const sum = Math.round(qty * shopPrice(s, e, g));
       flow(s, g, 'retail', qty); efl(e, g, 'sold', qty); efl(e, g, 'rev', sum);
       get(e, sum, 'retail', 'Покупатели');
       e.last.sold[g] = qty;
@@ -564,7 +625,7 @@ export function productionTick(s, { spend, earn, fx, news }) {
     if (lvl >= 10) continue;
     const pts = e.divs.reduce((a, d) => a + d.workers * d.level, 0) / 1.5 * salaryEff(s, e) * specBonus(s, e);
     e.progress += pts;
-    e.xpExtra = (e.xpExtra || 0) + pts * 60;
+    e.xpExtra = (e.xpExtra || 0) + pts * 6000;
     if (e.progress >= researchCost(lvl)) {
       e.progress -= researchCost(lvl);
       map[e.research] = lvl + 1;
@@ -613,11 +674,14 @@ export function productionTick(s, { spend, earn, fx, news }) {
   specsTick(s, { spend, news });
   // склады города: подвоз извне и покупки остальных горожан; цена растёт при дефиците
   for (const g in s.prices) {
-    const d = DEPOT[GOODS[g].kind];
+    const d = depotOf(g);
     let scarcity = 1;
     if (d) {
-      s.depot[g] = Math.max(0, Math.round(s.depot[g] * (1 - d.restock / d.start) + d.restock));
+      s.depot[g] = Math.max(0, Math.round((s.depot[g] * (1 - d.restock / d.start) + d.restock) * 100) / 100);
       scarcity = clamp(Math.pow(d.start / (s.depot[g] + d.start * 0.05), 0.35), 0.75, 2.5);
+      // конкуренты тоже производят и пополняют свои склады
+      const cap = npcStart(g) * 1.5;
+      if (s.npc?.[g]) s.npc[g] = s.npc[g].map((v, i) => (npcSells(g, i) ? Math.min(cap, v + npcRestock(g)) : 0));
     }
     const mod = s.priceMods[g];
     const target = GOODS[g].price * (mod ? mod.mult : 1) * scarcity;
@@ -729,6 +793,12 @@ export function migrateEnterprises(s) {
     if (e.autoSupply && e.autoSupply.weeks == null) e.autoSupply.weeks = clamp(Math.round((e.autoSupply.days || 7) / 7), 1, 5);
     if (e.type === 'mine' && !e.sub) e.sub = { ore: 'ore', coal: 'coal', stone: 'stone', sand: 'sand', clay: 'clay', gold: 'gold' }[e.divs[0]?.recipe] || 'stone';
   }
-  for (const c of s.contracts) c.good = ren(c.good);
-  s.contracts = s.contracts.filter(c => GOODS[c.good]);
+  // закупки и поставки старого формата → снабжение с выбором поставщика
+  for (const e of Object.values(s.enterprises)) {
+    e.supply ||= {};
+    for (const g in e.buy || {}) if (GOODS[g] && !e.supply[g]) e.supply[g] = { src: 'depot', qty: e.buy[g] };
+    delete e.buy;
+  }
+  for (const c of s.contracts || []) { const B = s.enterprises[c.to]; if (B && GOODS[ren(c.good)] && s.enterprises[c.from]) B.supply[ren(c.good)] = { src: c.from, qty: c.qty }; }
+  s.contracts = [];
 }
