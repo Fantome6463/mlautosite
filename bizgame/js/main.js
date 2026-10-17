@@ -90,10 +90,8 @@ function runDay() {
   const s = app.state;
   const fx = G.tick(s);
   for (const f of fx) {
-    if (f.type === 'money') {
-      const b = f.id ? s.buildings[f.id] : null;
-      world.floatText(b ? b.i : f.i, b ? b.j : f.j, (f.amount >= 0 ? '+' : '') + G.fmt(f.amount), f.amount < 0 ? 'neg' : '');
-    } else if (f.type === 'built') {
+    if (f.type === 'money') continue; // ежедневные суммы над домами не показываем — карта чище, деньги видны в шапке
+    else if (f.type === 'built') {
       const b = s.buildings[f.id];
       if (b && b.owner === 'player') { world.floatText(b.i, b.j, 'Достроено!', 'info'); ui.toast(`🎉 ${BUILDINGS[b.type].name} №${b.id} достроен!`); }
     } else if (f.type === 'quest') ui.toast(`🏆 Задание выполнено! +${G.fmt(f.quest.reward)}`);

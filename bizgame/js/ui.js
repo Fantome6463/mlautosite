@@ -130,23 +130,24 @@ export class UI {
   }
 
   // ---------- значки над зданиями ----------
+  // Значки над зданиями — только то, что требует внимания: ваши стройки и дома с проблемами
   renderBadges() {
     const s = this.s, world = this.app.world, root = $('#badges');
-    const shopHosts = new Set(Object.values(s.enterprises).filter(e => e.host).map(e => e.host));
-    const list = Object.values(s.buildings).filter(b => b.owner === 'player' || shopHosts.has(b.id));
+    const list = [];
+    for (const b of Object.values(s.buildings)) {
+      if (b.owner !== 'player') continue;
+      if (b.state === 'build') list.push([b, `${ic(b.paused ? 'stop' : 'crane')}${pct(b.progress / b.buildDays)}`, b.paused]);
+      else if (Object.keys(b.units).length && G.occRate(b) < 0.5 && s.day - (b.built || 0) > 7) list.push([b, `${ic('alert')}${pct(G.occRate(b))}`, true]);
+    }
     while (root.children.length < list.length) root.appendChild(document.createElement('div'));
     while (root.children.length > list.length) root.lastChild.remove();
-    list.forEach((b, n) => {
+    list.forEach(([b, html, bad], n) => {
       const el = root.children[n];
       const p = world.screenPos(b.i, b.j, world.heightOf(b));
       if (!p) { el.style.display = 'none'; return; }
-      let html, bad = false;
-      if (b.state === 'build') { bad = b.paused; html = `${ic(b.paused ? 'stop' : 'crane')}${pct(b.progress / b.buildDays)}`; }
-      else if (b.owner === 'player') html = `${ic(bGlyph(b.type))}${BUILDINGS[b.type].category === 'social' ? '' : pct(G.occRate(b))}`;
-      else html = '';
-      if (shopHosts.has(b.id)) html += ic('store');
-      if (el._h !== html) { el.innerHTML = html.trim(); el._h = html; }
+      if (el._h !== html) { el.innerHTML = html; el._h = html; }
       el.className = 'badge' + (bad ? ' bad' : '');
+      el.title = bad ? (b.state === 'build' ? 'Стройка стоит' : 'Мало арендаторов — снизьте аренду') : 'Стройка';
       el.style.display = '';
       el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -100%)`;
     });
@@ -1353,11 +1354,10 @@ export class UI {
 
   city_map() {
     const c = this.app.world.coverage || {};
-    return `<div class="mapframe" id="mapSlot"></div>
-      <p class="hint">Клик по участку — информация и стройка. Мышь: левая кнопка — двигать, правая — вращать, колесо — масштаб.
-        Круги показывают зоны охвата: зелёные — ваши здания, красные — конкурентов.</p>
-      <div class="filters">${[['hospital', 'Больницы', bTile('hospital', 'sm')], ['police', 'Полиция', bTile('police', 'sm')], ['school', 'Школы', bTile('school', 'sm')], ['shops', 'Магазины', entTile('shop', null, 'sm')]]
-        .map(([k, n, i]) => `<label class="fchip ${c[k] ? 'on' : ''}"><input type="checkbox" data-act="cover" data-k="${k}" ${c[k] ? 'checked' : ''}>${i} ${n}</label>`).join('')}</div>`;
+    return `<div class="mapframe" id="mapSlot"><div class="maplayers" title="Зоны охвата: зелёные — ваши, красные — конкурентов">${[['hospital', 'Больницы', 'hospital'], ['police', 'Полиция', 'shield'], ['school', 'Школы', 'school'], ['shops', 'Магазины', 'store']]
+        .map(([k, n, i]) => `<label class="${c[k] ? 'on' : ''}" title="Охват: ${n}"><input type="checkbox" data-act="cover" data-k="${k}" ${c[k] ? 'checked' : ''}>${ic(i)}</label>`).join('')}</div></div>
+      <p class="hint">Клик по участку — информация и стройка. Мышь: левая кнопка — двигать, правая — вращать, колесо — масштаб. Значками сверху справа включаются зоны охвата
+        больниц, полиции, школ и магазинов: зелёные — ваши, красные — конкурентов. Над домами показываются только ваши стройки и дома, где мало арендаторов.</p>`;
   }
 
   city_info(s) {
