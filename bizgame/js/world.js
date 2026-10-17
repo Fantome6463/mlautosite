@@ -620,3 +620,7 @@ function occupancy(b) {
 }
 
 export { BUILDINGS };
+
+// Для 3D-миниатюр (thumbs.js): модели зданий и общие помощники
+export const BUILDING_MODELS = { office: makeOffice, residential: makeResidential, mixed: makeResidential, mall: makeMall, hospital: makeHospital, police: makePolice, school: makeSchool };
+export { facade, tree, box, cyl, mat, mesh, signMat };

@@ -15,27 +15,23 @@
       <div class="stats">
         <div class="stat co" title="Компания и её уровень"><span class="star sm" id="compLvl">1</span><div><small>Компания</small><b id="hdrCompany">—</b></div></div>
         <div class="stat" title="Деньги на счёте" data-ic="wallet"><div><small>Деньги</small><b id="money">—</b></div></div>
-        <div class="stat hide-s" title="Капитал компании" data-ic="coins"><div><small>Капитал</small><b id="worth">—</b></div></div>
-        <div class="stat hide-s" title="Население города" data-ic="people"><div><small>Население</small><b id="pop">—</b></div></div>
+        <div class="stat" hidden title="Капитал компании" data-ic="coins"><div><small>Капитал</small><b id="worth">—</b></div></div>
+        <div class="stat" hidden title="Население города" data-ic="people"><div><small>Население</small><b id="pop">—</b></div></div>
         <div class="stat day" title="Игровая дата и время до нового дня" data-ic="clock"><div><small id="date">—</small><b><span class="daybar"><i id="dayBar"></i></span><span id="dayLeft">—</span></b></div></div>
       </div>
     </header>
 
     <nav id="toolbar">
-      <button data-page="city" data-ic="globe"><span>Город</span></button>
-      <button data-page="company" data-tab="main" data-ic="briefcase"><span>Компания</span></button>
-      <button data-page="company" data-tab="ent" data-ic="factory"><span>Предприятия</span></button>
-      <button data-page="company" data-tab="staff" data-ic="users"><span>Специалисты</span></button>
-      <button data-page="builds" data-ic="crane"><span>Стройки</span></button>
-      <button data-page="company" data-tab="finance" data-ic="wallet"><span>Финансы</span></button>
-      <button data-page="company" data-tab="reports" data-ic="report"><span>Отчёты</span></button>
-      <button data-page="market" data-ic="trend"><span>Рынок</span></button>
-      <button data-page="exchange" data-ic="handshake"><span>Биржа</span></button>
-      <button data-page="rating" data-ic="trophy"><span>Рейтинг</span></button>
-      <button data-page="quests" data-ic="tasks"><span>Задания</span><em id="questDot"></em></button>
+      <button data-page="city" data-nav="city" data-ic="globe"><span>Город</span></button>
+      <button data-page="company" data-tab="main" data-nav="company" data-ic="briefcase"><span>Компания</span></button>
+      <button data-page="company" data-tab="ent" data-nav="ent" data-ic="factory"><span>Предприятия</span></button>
+      <button data-page="market" data-nav="market" data-ic="trend"><span>Рынок</span></button>
+      <button data-page="company" data-tab="finance" data-nav="fin" data-ic="wallet"><span>Финансы</span></button>
+      <button data-page="rating" data-nav="rating" data-ic="trophy"><span>Рейтинг</span></button>
       <span class="grow"></span>
-      <button class="ico" data-page="help" data-ic="help" title="Как играть"></button>
-      <button class="ico" data-page="settings" data-ic="settings" title="Настройки"></button>
+      <button class="ico" data-page="quests" data-nav="quests" data-ic="tasks" title="Задания"><em id="questDot"></em></button>
+      <button class="ico" data-page="help" data-nav="help" data-ic="help" title="Как играть"></button>
+      <button class="ico" data-page="settings" data-nav="settings" data-ic="settings" title="Настройки"></button>
     </nav>
 
     <main id="main">

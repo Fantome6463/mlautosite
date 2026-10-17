@@ -200,6 +200,7 @@ export class UI {
       else html += this.rivalBuildingHtml(b);
     }
     side.innerHTML = html;
+    this.foldHints(side);
     side.scrollTop = top;
   }
 
@@ -221,7 +222,7 @@ export class UI {
     for (const cat in CATEGORIES) {
       const types = Object.keys(BUILDINGS).filter(t => BUILDINGS[t].category === cat);
       h += `<div class="cat"><b>${CATEGORIES[cat].name}</b><small>${CATEGORIES[cat].desc}</small><div class="chips">
-        ${types.map(t => `<button class="chip ${f.type === t ? 'on' : ''}" data-act="ftype" data-v="${t}">${ic(bGlyph(t))}${BUILDINGS[t].name}</button>`).join('')}</div></div>`;
+        ${types.map(t => `<button class="bcard ${f.type === t ? 'on' : ''}" data-act="ftype" data-v="${t}">${this.thumb('b', t, null, 'sm')}<span>${BUILDINGS[t].name}</span></button>`).join('')}</div></div>`;
     }
     const d = BUILDINGS[f.type];
     h += `</div>`;
@@ -291,8 +292,8 @@ export class UI {
     for (const t in b.units) {
       const u = b.units[t], area = isArea(t);
       const shops = area ? P.shopArea(s, b) : 0;
-      h += `<tr><td><span class="nm">${unitIc(t)}${UNITS[t].name}</span></td><td class="r">${num(u.occ + shops)} / ${num(u.total)}${area ? ' м²' : ''}</td>
-        <td>${editable ? `<input type="number" min="1" value="${u.rent}" data-act="rent" data-t="${t}" style="width:80px">` : num(u.rent)} <span class="hint">₽${area ? '/м²' : ''}</span></td>
+      h += `<tr><td><span class="nm">${unitIc(t)}${UNITS[t].name}</span></td><td class="r nw">${num(u.occ + shops)} / ${num(u.total)}${area ? ' м²' : ''}</td>
+        <td class="nw">${editable ? `<input type="number" min="1" value="${u.rent}" data-act="rent" data-t="${t}" style="width:72px">` : num(u.rent)} <span class="hint">₽${area ? '/м²' : ''}</span></td>
         <td class="r">${Math.round(G.refRent(p, t))}</td></tr>`;
     }
     return h + '</table>';
@@ -303,7 +304,7 @@ export class UI {
     const tabs = [['main', 'Обзор']];
     if (Object.keys(b.units).length) tabs.push(['tenants', 'Арендаторы']);
     if (!tabs.some(t => t[0] === this.tab)) this.tab = 'main';
-    let h = `<h2>${bTile(b.type)} ${d.name}</h2><div class="sub">№${b.id} · ${b.floors} эт. · участок ${b.i}:${b.j} · построил ${contractorInfo(b.contractor).name}</div>
+    let h = `${this.thumb('b', b.type, null, 'side')}<h2>${d.name}</h2><div class="sub">№${b.id} · ${b.floors} эт. · участок ${b.i}:${b.j} · построил ${contractorInfo(b.contractor).name}</div>
       <div class="tabs">${tabs.map(([k, n]) => `<button data-act="tab" data-tab="${k}" class="${this.tab === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
     const profit = b.last.income - b.last.expense;
     if (this.tab === 'main') {
@@ -353,7 +354,7 @@ export class UI {
 
   rivalBuildingHtml(b) {
     const s = this.s, d = BUILDINGS[b.type];
-    let h = `<h2>${bTile(b.type)} ${d.name}</h2><div class="sub">№${b.id} · ${b.floors} эт. · участок ${b.i}:${b.j}</div>
+    let h = `${this.thumb('b', b.type, null, 'side')}<h2>${d.name}</h2><div class="sub">№${b.id} · ${b.floors} эт. · участок ${b.i}:${b.j}</div>
       <div class="kv"><span>Владелец</span><span style="color:${ownerColor(b)}">${ownerName(s, b)}</span><span>Заполненность</span><span>${pct(G.occRate(b))}</span>${this.coverageHtml(b.i, b.j)}</div>`;
     if (Object.keys(b.units).length) h += this.unitsTable(b, false);
     return h + this.openShopHtml(b);
@@ -379,7 +380,7 @@ export class UI {
     if (!tabs.some(t => t[0] === this.entTab)) this.entTab = 'main';
     const host = e.host && s.buildings[e.host];
     const prob = this.entProblem(e);
-    return `<div class="page-title">${eTile(e, 'xl')}
+    return `<div class="page-title">${this.thumb('ent', e.type, e.sub, 'hd')}
         <div><div class="enav"><button class="btn icon" data-act="entnav" data-dir="-1" title="Предыдущее">${ic('left')}</button><button class="btn icon" data-act="entnav" data-dir="1" title="Следующее">${ic('right')}</button>
           <h1>${esc(e.name)}</h1></div>
           <div class="hint">Компания: <a href="#" data-act="cotabgo" data-k="main">${esc(s.company)}</a> · ${d.name}${host ? ` · <a href="#" data-act="goplot" data-i="${host.i}" data-j="${host.j}">дом №${host.id}</a>` : ' · виртуальное предприятие'}</div></div>
@@ -391,41 +392,47 @@ export class UI {
   }
 
   ep_main(e, s) {
-    const d = entDef(e), w = weekOf(e.hist), fl = P.entFlow(e);
-    const fill = d.storage ? P.stockTotal(e) / P.capacity(e) : 0, wear = P.wearOf(e);
-    const own = Object.values(fl).reduce((a, x) => a + (x.shipped || 0), 0), sold = Object.values(fl).reduce((a, x) => a + (x.sold || 0), 0);
-    let stockVal = 0;
-    for (const g in e.stock) stockVal += e.stock[g].qty * s.prices[g] * 0.6;
+    const d = entDef(e), w = weekOf(e.hist), wear = P.wearOf(e);
+    const fill = P.capacity(e) ? P.stockTotal(e) / P.capacity(e) : 0;
     const sp = P.specOf(s, e), eff = Math.min(1, (P.workersOf(e) / Math.max(1, P.maxWorkers(e))) * P.salaryEff(s, e) * P.specBonus(s, e) * (1 - wear / 2));
-    const goods = [...new Set([...e.divs.map(x => x.recipe).filter(Boolean), ...Object.keys(e.stock)])].slice(0, 14);
     const slots = [...e.divs, null];
-    return `<div class="co-grid">
-      <div>
-        <div class="row big2"><span title="Рабочие">${ic('hardhat')} ${num(P.workersOf(e))}</span><span title="Оборудование, шт.">${ic('gear')} ${num(e.divs.reduce((a, x) => a + (x.eqN || 0), 0))}</span></div>
-        <div class="kv"><span>Уровень / занято подразделениями</span><span>${e.lvl || 1} / ${P.levelOf(e)} (свободно ${P.freeLevels(e)})</span>
-          <span>Опыт</span><span>${num(e.xp || 0)} из ${num(P.xpNeed(e.lvl || 1))}</span><span>Опыт за вчера</span><span>+${num(e.lastXp || 0)}</span></div>
-        ${P.freeLevels(e) >= P.XP_FREE_CAP ? `<p class="warn">Опыт не копится: ${P.XP_FREE_CAP} свободных уровней не использованы — постройте или улучшите подразделение.</p>` : ''}
-        ${d.storage ? `<div class="row"><label>Склад</label><span class="effbar wide"><i style="width:${Math.round(fill * 100)}%"></i></span> ${pct(fill)}</div>` : ''}
-        <div class="row"><label>Износ оборудования</label><span class="effbar wide red"><i style="width:${Math.round(wear * 100)}%"></i></span> ${pct(wear)}</div>
-        <h4 class="sect">Структура сбыта (7 дней)</h4>
-        <div class="kv"><span>Своей компании</span><span>${num(own)} шт.</span><span>Другим</span><span>${num(sold)} шт.</span></div>
-        <div class="gicons">${goods.map(g => `<span class="ge" title="${GOODS[g].name}: ${num(P.stockQty(e, g))} на складе">${GOODS[g].icon}<i style="height:${Math.min(100, (P.stockQty(e, g) / Math.max(1, P.capacity(e) / 4)) * 100)}%"></i></span>`).join('')}</div>
+    return `${this.kpis([
+        ['Выручка за неделю', fmtShort(w.rev)],
+        ['Прибыль за неделю', fmtShort(w.rev - w.exp), w.rev - w.exp >= 0 ? 'pos' : 'neg'],
+        ['Рабочие', `${num(P.workersOf(e))} / ${num(P.maxWorkers(e))}`],
+        ['Эффективность', pct(eff), '', eff],
+        ['Склад', pct(fill), '', fill],
+        ...(P.equipOf(e) ? [['Износ', pct(wear), wear > 0.6 ? 'neg' : '', wear, 'red']] : []),
+      ])}
+      <div class="split">
+        <div><h3>Подразделения</h3>
+          <div class="iso">${slots.map(x => x
+            ? `<button class="isotile" data-act="enttab-go" data-k="divs" title="${esc(P.divName(e, x))}">${this.thumb('ent', e.type, e.sub, 'sm')}<span class="star sm">${x.level}</span>${x.recipe ? `<b class="ge">${GOODS[x.recipe].icon}</b><span class="slot">${GOODS[x.recipe].name}</span>` : ''}${x.on ? '' : '<em>выкл.</em>'}</button>`
+            : `<button class="isotile empty ${P.freeLevels(e) < 1 ? 'nofree' : ''}" data-act="adddiv" title="${P.freeLevels(e) < 1 ? 'Нужен свободный уровень предприятия' : 'Новое подразделение — ' + fmt(P.divCost(e))}"><span>${ic(P.freeLevels(e) < 1 ? 'lock' : 'plus')}${P.freeLevels(e) < 1 ? 'нужен свободный уровень' : 'новое · ' + fmtShort(P.divCost(e))}</span></button>`).join('')}</div>
+          ${P.freeLevels(e) >= P.XP_FREE_CAP ? `<p class="warn">Опыт не копится: ${P.XP_FREE_CAP} свободных уровней не использованы — постройте или улучшите подразделение.</p>` : ''}
+        </div>
+        <div><h3>Прибыль по дням</h3><div class="chart-box"><canvas class="chart" id="echart"></canvas></div>
+          <div class="boss-line">${sp ? `${ava(sp.name)} <span><b>${esc(sp.name)}</b><br><span class="hint">${sp.prof} · ${sp.level}-й уровень</span></span>`
+            : `<span class="avatar empty">${ic('user')}</span> <span class="hint">Начальник не назначен · <a href="#" data-act="cotabgo" data-k="staff">нанять</a></span>`}</div></div>
       </div>
-      <div class="co-center">
-        <div class="chart-box"><canvas class="chart" id="echart"></canvas></div>
-        <div class="statlist"><span>Наличные компании:</span><span>${fmt(s.money)}</span><span>Выручка (7 дн.):</span><span>${fmt(w.rev)}</span>
-          <span>Прибыль (7 дн.):</span><span class="${w.rev - w.exp >= 0 ? 'pos' : 'neg'}">${fmt(w.rev - w.exp)}</span><span>Активы:</span><span>${fmt(e.invested * 0.6 + stockVal)}</span></div>
-      </div>
-      <div class="profile">${sp ? `${ava(sp.name, 'lg')}<br>${esc(sp.name)}<br>${sp.prof} · ур. ${sp.level}` : `<span class="avatar lg empty">${ic('user')}</span><br>Начальник не назначен<br><a href="#" data-act="cotabgo" data-k="staff">нанять специалиста</a>`}
-        <div style="margin-top:8px">Эффективность: <span class="eff"><i style="width:${Math.round(eff * 100)}%"></i></span> ${pct(eff)}</div></div>
-    </div>
-    <div class="iso">${slots.map(x => x
-      ? `<button class="isotile" data-act="enttab-go" data-k="divs" title="${esc(P.divName(e, x))}">${eTile(e, 'lg')}<span class="star sm">${x.level}</span>${x.recipe ? `<b class="ge">${GOODS[x.recipe].icon}</b><span class="slot">${GOODS[x.recipe].name}</span>` : ''}${x.on ? '' : '<em>выкл.</em>'}</button>`
-      : `<button class="isotile empty ${P.freeLevels(e) < 1 ? 'nofree' : ''}" data-act="adddiv" title="${P.freeLevels(e) < 1 ? 'Нужен свободный уровень предприятия' : 'Новое подразделение — ' + fmt(P.divCost(e))}"><span>${ic(P.freeLevels(e) < 1 ? 'lock' : 'plus')}${P.freeLevels(e) < 1 ? 'нужен свободный уровень' : 'новое · ' + fmtShort(P.divCost(e))}</span></button>`).join('')}</div>
-    ${this.moveMergeHtml(e, s)}
-    <div class="actions"><input type="text" value="${esc(e.name)}" data-act="ename" maxlength="40" style="width:240px">
-      <button class="btn" data-act="gopage" data-k="exchange" data-ex="sell">${ic('handshake')} Продать на бирже (оценка ${fmt(P.entValue(s, e))})</button>
-      <button class="btn danger" data-act="eclose">Продать государству (${fmt(P.stateBuyout(s, e))})</button></div>`;
+      <details class="manage" data-k="manage"><summary>${ic('settings')} Управление: название, переезд, объединение, продажа</summary>
+        <div class="row"><label>Название</label><input type="text" value="${esc(e.name)}" data-act="ename" maxlength="40" style="width:280px"></div>
+        ${this.moveMergeHtml(e, s)}
+        <div class="actions"><button class="btn" data-act="gopage" data-k="exchange" data-ex="sell">${ic('handshake')} Продать на бирже · оценка ${fmtShort(P.entValue(s, e))}</button>
+          <button class="btn danger" data-act="eclose">Продать государству · ${fmtShort(P.stateBuyout(s, e))}</button></div>
+      </details>`;
+  }
+
+  // Картинка-миниатюра (3D): здание или предприятие; пока нет картинки — цветная плитка
+  thumb(kind, type, sub = null, size = '') {
+    const src = this.app.thumbs?.get(kind, type, sub);
+    if (src) return `<img class="thumb ${size}" src="${src}" alt="">`;
+    return kind === 'ent' ? entTile(type, sub, size === 'sm' ? 'lg' : 'xl') : bTile(type, size === 'sm' ? 'lg' : 'xl');
+  }
+
+  // Ряд ключевых показателей: [подпись, значение, класс, доля для полоски, цвет полоски]
+  kpis(list) {
+    return `<div class="kpis">${list.map(([label, value, cls = '', bar = null, col = '']) => `<div class="kpi"><small>${label}</small><b class="${cls}">${value}</b>${bar != null ? `<span class="effbar ${col}"><i style="width:${Math.round(Math.min(1, Math.max(0, bar)) * 100)}%"></i></span>` : ''}</div>`).join('')}</div>`;
   }
 
   // Переезд (для торговли) и объединение с предприятием того же вида
@@ -648,7 +655,7 @@ export class UI {
       for (const t in ENTERPRISES) {
         const T = ENTERPRISES[t];
         const minCost = T.subs ? Math.min(...Object.values(T.subs).map(x => x.cost || T.cost)) : T.cost;
-        h += `<button class="ccard ${locked(T) ? 'locked' : ''}" data-act="crtype" data-k="${t}" ${T.later ? 'disabled' : ''}><span class="cicon">${entTile(t, null, 'xl')}</span>
+        h += `<button class="ccard ${locked(T) ? 'locked' : ''}" data-act="crtype" data-k="${t}" ${T.later ? 'disabled' : ''}><span class="cicon">${this.thumb('ent', t)}</span>
           <div><b>${T.name}</b><small>${T.desc}</small><i>Инвестиции: от ${fmtShort(minCost)}</i>${lock(T)}${icons(typeGoods(t).slice(0, 26))}</div></button>`;
       }
       return h + '</div>';
@@ -659,7 +666,7 @@ export class UI {
       for (const sb in T.subs) {
         const D = defOf(cr.type, sb);
         const list = sellsList(cr.type, sb).length ? sellsList(cr.type, sb) : D.groups !== undefined ? Object.keys(GOODS).filter(g => P.inDepot(g) && (!D.groups || D.groups.includes(GOODS[g].group))) : recipesFor(cr.type, sb);
-        h += `<button class="ccard ${locked(D) ? 'locked' : ''}" data-act="crsub" data-k="${sb}"><span class="cicon">${entTile(cr.type, sb, 'xl')}</span>
+        h += `<button class="ccard ${locked(D) ? 'locked' : ''}" data-act="crsub" data-k="${sb}"><span class="cicon">${this.thumb('ent', cr.type, sb)}${entTile(cr.type, sb, 'sm')}</span>
           <div><b>${D.name}</b><small>${D.desc}</small><i>Инвестиции: от ${fmtShort(D.cost)}</i>${lock(D)}${icons(list.slice(0, 40))}</div></button>`;
       }
       return h + `</div><div class="actions"><button class="btn" data-act="crback">${ic('left')} Назад</button></div>`;
@@ -669,7 +676,7 @@ export class UI {
     const options = recipesFor(cr.type, cr.sub);
     const hosts = D.sells ? P.shopHosts(s) : [];
     const err = locked(D) ? 'Недостаточный уровень компании' : s.money < D.cost ? `Не хватает денег: нужно ${fmt(D.cost)}` : D.sells && !hosts.length ? 'Нет свободных коммерческих помещений' : null;
-    h += `<div class="ccard wide static"><span class="cicon">${entTile(cr.type, cr.sub, 'xl')}</span><div><b>${D.name}</b><small>${D.desc}</small>
+    h += `<div class="ccard wide static"><span class="cicon">${this.thumb('ent', cr.type, cr.sub)}${cr.sub ? entTile(cr.type, cr.sub, 'sm') : ''}</span><div><b>${D.name}</b><small>${D.desc}</small>
         <div class="kv" style="max-width:520px"><span>Инвестиции</span><span>${fmt(D.cost)}</span><span>Рабочих в подразделении</span><span>${D.workers}</span>
         <span>Склад</span><span>${num(D.storage || 0)} ед.</span><span>Содержание</span><span>${fmt(D.upkeep)}/день</span></div>
         <div class="row"><label>Название</label><input type="text" id="crName" maxlength="40" value="${esc(D.name)}" style="flex:1;max-width:320px"></div>
@@ -808,7 +815,7 @@ export class UI {
       case 'exunlist': run(() => P.listEnterprise(s, +t.dataset.id, 0)); this.renderPage(); break;
       case 'cotab': this.coTab = t.dataset.tab; this.renderPage(); this.markNav(); break;
       case 'tocity': ev.preventDefault(); this.showCity(); break;
-      case 'gopage': ev.preventDefault(); if (t.dataset.ex) this.exTab = t.dataset.ex; this.openPage(t.dataset.k, t.dataset.tab); break;
+      case 'gopage': ev.preventDefault(); if (t.dataset.ex) this.exTab = t.dataset.ex; if (t.dataset.k === 'market' && t.dataset.tab) this.winTab = t.dataset.tab; this.openPage(t.dataset.k, t.dataset.tab); break;
       case 'entfilter': this.entFilter = t.dataset.k || null; this.renderPage(); break;
       case 'finsub': ev.preventDefault(); this.finSub = t.dataset.k; this.txPage = 0; this.renderPage(); break;
       case 'txpage': this.txPage = +t.dataset.p; this.renderPage(); break;
@@ -890,11 +897,19 @@ export class UI {
     if (this.page === 'city' && this.cityTab === 'map') return;
     this.openPage('city', 'map');
   }
+  // Раздел меню для текущей страницы: подстраницы подсвечивают свой раздел
+  navGroup() {
+    const p = this.page;
+    if (p === 'company') return { main: 'company', ent: 'ent', staff: 'ent', finance: 'fin', reports: 'fin' }[this.coTab];
+    return { builds: 'city', ent: 'ent', create: 'ent', exchange: 'market' }[p] || p;
+  }
   markNav() {
-    document.querySelectorAll('#toolbar button').forEach(b => {
-      const on = b.dataset.page === this.page && (this.page !== 'company' || b.dataset.tab === this.coTab);
-      b.classList.toggle('on', on);
-    });
+    const g = this.navGroup();
+    document.querySelectorAll('#toolbar button').forEach(b => b.classList.toggle('on', b.dataset.nav === g));
+  }
+  // Подразделы внутри раздела меню — вкладки под заголовком
+  subnav(items) {
+    return `<div class="ftabs">${items.map(([page, tab, n, on]) => `<button data-act="gopage" data-k="${page}" ${tab ? `data-tab="${tab}"` : ''} class="${on ? 'on' : ''}">${n}</button>`).join('')}</div>`;
   }
 
   renderPage() {
@@ -903,12 +918,32 @@ export class UI {
     $('#cityHolder').appendChild(view);
     const fn = this[`page_${this.page}`] || (() => this.titled(this.page));
     $('#pageBody').innerHTML = fn.call(this, this.s);
+    this.foldHints($('#pageBody'));
     const slot = $('#mapSlot');
     this.app.world.paused = !slot;
     if (slot) { slot.appendChild(view); this.app.world.resize(); }
     if (this.page === 'company' && this.coTab === 'main') this.drawChart();
     if (this.page === 'ent' && this.entTab === 'main') this.drawEntChart();
     if (this.page === 'company' && this.coTab === 'reports' && this.rep === 'charts') this.drawReportCharts();
+  }
+  // Длинные пояснения сворачиваются в «Подробнее», чтобы страница была чище
+  foldHints(root) {
+    this.moreOpen ||= new Set();
+    for (const d of root.querySelectorAll('details[data-k]')) {
+      d.open = this.moreOpen.has(d.dataset.k);
+      d.addEventListener('toggle', () => (d.open ? this.moreOpen.add(d.dataset.k) : this.moreOpen.delete(d.dataset.k)));
+    }
+    for (const p of root.querySelectorAll('p.hint')) {
+      if (p.textContent.trim().length < 110 || p.closest('td, details, .ccard, .contractor')) continue;
+      const d = document.createElement('details'), key = p.textContent.trim().slice(0, 50);
+      d.className = 'more';
+      this.moreOpen ||= new Set();
+      d.open = this.moreOpen.has(key);
+      d.addEventListener('toggle', () => (d.open ? this.moreOpen.add(key) : this.moreOpen.delete(key)));
+      d.innerHTML = `<summary>${ic('help')} Подробнее</summary>`;
+      p.replaceWith(d);
+      d.appendChild(p);
+    }
   }
   refreshWin() {
     if (this.page === 'city' && this.cityTab === 'map') return;
@@ -919,8 +954,10 @@ export class UI {
   }
 
   titled(name) {
-    const t = { market: ['trend', 'Рынок'], exchange: ['handshake', 'Биржа предприятий'], rating: ['trophy', 'Рейтинг компаний'], quests: ['tasks', 'Задания'], help: ['help', 'Как играть'] }[name];
-    return `<div class="page-title"><span class="pt-ic">${ic(t[0])}</span><h1>${t[1]}</h1></div>${this[`win_${name}`](this.s)}`;
+    const t = { market: ['trend', 'Рынок'], exchange: ['trend', 'Рынок'], rating: ['trophy', 'Рейтинг компаний'], quests: ['tasks', 'Задания'], help: ['help', 'Как играть'] }[name];
+    const sub = name === 'market' || name === 'exchange'
+      ? this.subnav([['market', 'goods', 'Товары и склады', name === 'market' && this.winTab !== 'chains'], ['market', 'chains', 'Цепочки производства', name === 'market' && this.winTab === 'chains'], ['exchange', '', 'Биржа предприятий', name === 'exchange']]) : '';
+    return `<div class="page-title"><span class="pt-ic">${ic(t[0])}</span><h1>${t[1]}</h1></div>${sub}${this[`win_${name}`](this.s)}`;
   }
 
   // ---------- страница компании ----------
@@ -929,8 +966,10 @@ export class UI {
     const t = { main: ['briefcase', esc(s.company)], ent: ['factory', 'Предприятия'], staff: ['users', 'Специалисты'], finance: ['wallet', 'Финансы'], reports: ['report', 'Отчёты'] }[this.coTab];
     const acts = this.coTab === 'main' ? `<button class="btn icon" data-act="rename" title="Переименовать компанию">${ic('pencil')}</button>`
       : this.coTab === 'ent' ? `<button class="btn primary" data-act="newent">${ic('plus')} Создать предприятие</button>` : '';
+    const sub = ['ent', 'staff'].includes(this.coTab) ? this.subnav([['company', 'ent', 'Предприятия', this.coTab === 'ent'], ['company', 'staff', 'Специалисты', this.coTab === 'staff']])
+      : ['finance', 'reports'].includes(this.coTab) ? this.subnav([['company', 'finance', 'Счета и платежи', this.coTab === 'finance'], ['company', 'reports', 'Отчёты', this.coTab === 'reports']]) : '';
     return `<div class="page-title"><span class="pt-ic">${ic(t[0])}</span><h1>${t[1]}</h1>${acts ? `<div class="acts">${acts}</div>` : ''}</div>
-      ${this[`co_${this.coTab}`](s)}`;
+      ${sub}${this[`co_${this.coTab}`](s)}`;
   }
 
   // сумма доходов/расходов за последние n дней
@@ -949,8 +988,7 @@ export class UI {
 
   co_main(s) {
     const p = this.period(7), rev = p.sum('inc'), exp = p.sum('exp'), profit = rev - exp;
-    const salary = Object.values(s.enterprises).reduce((a, e) => a + P.workersOf(e) * e.salary, 0);
-    const supply = p.sum('exp', 'purchase'), assets = G.netWorth(s) + s.loan;
+    const assets = G.netWorth(s) + s.loan;
     const blds = Object.values(s.buildings).filter(G.isPlayer), ents = Object.values(s.enterprises);
     const place = G.rating(s).findIndex(r => r.player) + 1;
     const eff = this.efficiency();
@@ -962,47 +1000,33 @@ export class UI {
     ].join('');
     const hq = Object.keys(HQ).map(k => {
       const l = s.hq[k] || 1, used = { staff: P.staffTotal(s), manage: ents.length, prod: P.products(s).size, build: blds.filter(b => b.state === 'build').length, finance: s.money, mining: P.minedTypes(s).size }[k];
-      return `<div class="dept"><span class="star">${l}</span><div><div class="nm">${HQ[k].name}</div><div class="lim ${HQ[k].money && used > hqLimit(s, k) ? 'neg' : ''}">${HQ[k].label}: ${HQ[k].money ? fmtShort(used) + ' / ' + fmtShort(hqLimit(s, k)) : num(used) + ' / ' + num(hqLimit(s, k))}</div></div>
+      const lim = hqLimit(s, k), full = used >= lim;
+      return `<div class="dept"><span class="star sm">${l}</span><div><div class="nm">${HQ[k].name}</div><div class="lim ${full ? 'neg' : ''}">${HQ[k].label}: ${HQ[k].money ? fmtShort(used) + ' / ' + fmtShort(lim) : num(used) + ' / ' + num(lim)}</div>
+        <span class="effbar ${full ? 'red' : ''}"><i style="width:${Math.round(Math.min(1, used / lim) * 100)}%"></i></span></div>
         ${l < HQ_MAX ? `<button class="btn small" data-act="hq" data-k="${k}" ${s.money < hqUpgradeCost(l) ? 'disabled' : ''} title="Повысить уровень">${ic('up')} ${fmtShort(hqUpgradeCost(l))}</button>` : ''}</div>`;
     }).join('');
-    return `<div class="co-grid">
-      <div class="statlist">
-        <span>Наличные:</span><span>${fmt(s.money)}</span>
-        <span>Выручка<small>за ${p.days} дн.</small>:</span><span>${fmt(rev)}</span>
-        <span>Расходы:</span><span>${fmt(exp)}</span>
-        <span>Прибыль:</span><span class="${profit >= 0 ? 'pos' : 'neg'}">${fmt(profit)}</span>
-        <span>Рентабельность:</span><span>${rev ? ((profit / rev) * 100).toFixed(1) : '0.0'}%</span>
-      </div>
-      <div class="co-center">
-        <div class="chart-box"><canvas class="chart" id="chart"></canvas></div>
-        <div class="statlist">
-          <span>Активы:</span><span><b>${fmt(assets)}</b></span>
-          <span>Зарплата персонала:</span><span>${fmt(salary)}/день</span>
-          <span>Недельное снабжение:</span><span>${fmt(supply)}</span>
-          <span>Кредит:</span><span>${fmt(s.loan)}</span>
+    const xpNeed = companyXpNeed(s.compLvl || 1);
+    return `${this.kpis([
+        ['Деньги', fmtShort(s.money)],
+        ['Выручка за неделю', fmtShort(rev)],
+        ['Прибыль за неделю', fmtShort(profit), profit >= 0 ? 'pos' : 'neg'],
+        ['Активы', fmtShort(assets)],
+        ['Эффективность', pct(eff), '', eff],
+        ['Место в рейтинге', `${place} из ${s.rivals.length + 1}`],
+      ])}
+      <div class="split">
+        <div>
+          <h3>Здания и предприятия <a href="#" class="hint" data-act="tocity">${ic('city')} ${esc(s.cityName)}</a></h3>
+          <div class="icons">${tiles || '<span class="hint">Пока пусто. Откройте город и закажите стройку на свободном участке или создайте предприятие в разделе «Предприятия».</span>'}</div>
+          <h3>Капитал за 60 дней</h3><div class="chart-box"><canvas class="chart" id="chart"></canvas></div>
         </div>
-      </div>
-      <div class="profile"><span class="avatar xl">${ic('briefcase')}</span><br><b>${esc(s.company)}</b><div class="hint">видна в рейтинге всем конкурентам</div>
-        <div style="margin-top:6px">Эффективность: <span class="eff"><i style="width:${Math.round(eff * 100)}%"></i></span> ${pct(eff)}</div>
-        <div style="margin-top:6px"><span class="star" title="Уровень компании">${this.companyLevel()}</span></div>
-        <div class="xpwrap" title="Опыт компании: ${num(s.compXp || 0)} из ${num(companyXpNeed(s.compLvl || 1))}">Опыт: <span class="effbar"><i style="width:${Math.round(((s.compXp || 0) / companyXpNeed(s.compLvl || 1)) * 100)}%"></i></span></div>
-        ${nextUnlocks(s)}
-      </div>
-
-      <div class="hq"><h2>Штаб-квартира</h2>${hq}
-        <p class="hint">Отделы задают лимиты: сколько можно нанять людей, держать предприятий, выпускать разных продуктов и вести строек одновременно.</p></div>
-      <div>
-        <div class="city-row"><a href="#" class="nm" data-act="tocity" title="Открыть карту города">${ic('city')} ${esc(s.cityName)}</a>
-          <span title="Выручка за неделю">${ic('cash')} ${fmtShort(rev)}</span><span title="Прибыль за неделю">${ic(profit >= 0 ? 'trend' : 'trendDown')} ${fmtShort(profit)}</span><span title="Активы">${ic('coins')} ${fmtShort(assets)}</span></div>
-        <div class="icons">${tiles || '<span class="hint">Пока пусто. Откройте город и закажите стройку на свободном участке или создайте предприятие в разделе «Предприятия».</span>'}</div>
-      </div>
-      <div class="medals">
-        <div class="medal" title="Место в рейтинге">${place}<small>место</small></div>
-        <div class="medal v" title="Выполнено заданий">${Object.keys(s.quests).length}<small>заданий</small></div>
-        <div class="medal v" title="Зданий">${blds.length}<small>зданий</small></div>
-        <div class="medal c" title="Предприятий">${ents.length}<small>предпр.</small></div>
-      </div>
-    </div>`;
+        <div>
+          <div class="lvlcard"><span class="star">${this.companyLevel()}</span><div><b>Уровень компании</b>
+            <div class="xpwrap" title="Опыт: ${num(s.compXp || 0)} из ${num(xpNeed)}"><span class="effbar wide"><i style="width:${Math.round(((s.compXp || 0) / xpNeed) * 100)}%"></i></span> ${pct((s.compXp || 0) / xpNeed)}</div>
+            ${nextUnlocks(s)}</div></div>
+          <div class="hq"><h3>Штаб-квартира</h3>${hq}</div>
+        </div>
+      </div>`;
   }
 
   // ---------- вкладка «Предприятия» (как в Бизмании) ----------
@@ -1319,7 +1343,7 @@ export class UI {
   // ---------- страница города (как «Город Ташкент» в Бизмании) ----------
   page_city(s) {
     this.cityTab ||= 'map';
-    const tabs = [['info', 'Город'], ['map', 'Карта'], ['projects', 'Проекты'], ['ents', 'Предприятия'], ['analytics', 'Аналитика']];
+    const tabs = [['info', 'Город'], ['map', 'Карта'], ['projects', 'Стройки'], ['ents', 'Здания'], ['analytics', 'Аналитика']];
     return `<div class="page-title"><span class="pt-ic">${ic('city')}</span><h1>Город ${esc(s.cityName)}</h1>
         <button class="btn icon" data-act="renamecity" title="Переименовать город">${ic('pencil')}</button>
         <div class="acts"><span class="hint">Уровень города</span><span class="star" title="Уровень города">${s.city.level || 1}</span></div></div>
@@ -1353,10 +1377,10 @@ export class UI {
 
   city_projects(s) {
     const list = Object.values(s.buildings).filter(b => b.state === 'build');
-    return list.length ? `<table class="grid"><tr><th>Объект</th><th>Заказчик</th><th>Подрядчик</th><th class="r">Готовность</th><th class="r">Осталось</th></tr>
+    return this.buildsHtml(s) + '<h3>Все стройки города</h3>' + (list.length ? `<table class="grid"><tr><th>Объект</th><th>Заказчик</th><th>Подрядчик</th><th class="r">Готовность</th><th class="r">Осталось</th></tr>
       ${list.map(b => `<tr><td><a href="#" data-act="goplot" data-i="${b.i}" data-j="${b.j}" class="nm">${bHtml(b)}</a> · ${b.floors} эт.</td><td style="color:${ownerColor(b)}">${ownerName(s, b)}</td>
         <td>${contractorInfo(b.contractor).name}</td><td class="r">${pct(b.progress / b.buildDays)}</td><td class="r">~${Math.ceil(b.buildDays - b.progress)} дн.</td></tr>`).join('')}</table>`
-      : '<p class="hint">Сейчас в городе ничего не строится.</p>';
+      : '<p class="hint">Сейчас в городе ничего не строится.</p>');
   }
 
   city_ents(s) {
@@ -1375,9 +1399,11 @@ export class UI {
     return h;
   }
 
-  page_builds(s) {
+  page_builds(s) { this.cityTab = 'projects'; this.page = 'city'; return this.page_city(s); }
+  // Ваши стройки и подрядчики — вкладка «Стройки» города
+  buildsHtml(s) {
     const blds = Object.values(s.buildings).filter(b => G.isPlayer(b) && b.state === 'build');
-    return `<div class="page-title"><span class="pt-ic">${ic('crane')}</span><h1>Стройки</h1><div class="acts"><button class="btn primary" data-act="tocity">${ic('pin')} Выбрать участок на карте</button></div></div>
+    return `<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="tocity">${ic('pin')} Выбрать участок на карте</button></div>
       <div class="kv" style="max-width:480px"><span>Строек сейчас</span><span>${blds.length} / ${hqLimit(s, 'build')}</span>
       <span>Своих строительных компаний</span><span>${G.builders(s).length}</span></div>
       ${blds.length ? `<table class="grid"><tr><th>Здание</th><th>Строит</th><th class="r">Готовность</th><th class="r">Осталось</th><th>Статус</th></tr>
@@ -1446,10 +1472,9 @@ export class UI {
   win_enterprises() { return this.co_ent(this.s); }
 
   win_market(s) {
-    // недвижимость — во вкладке «Аналитика» города
-    const tabs = [['goods', 'Товары и склады'], ['chains', 'Цепочки производства']];
+    // недвижимость — во вкладке «Аналитика» города; вкладки рынка — в общем подменю раздела
     if (this.page === 'market' && this.winTab === 'estate') this.winTab = 'goods';
-    let h = `<div class="tabs">${tabs.map(([k, n]) => `<button data-act="wtab" data-tab="${k}" class="${this.winTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
+    let h = '';
     if (this.winTab === 'estate') {
       const done = Object.values(s.buildings).filter(b => b.state === 'done');
       h += `<div class="kv"><span>Население</span><span>${num(s.city.population || 0)}</span><span>Рабочих мест</span><span>${num(s.city.jobs || 0)}</span></div>
@@ -1547,7 +1572,7 @@ export class UI {
   win_help() {
     return `<div class="help">
       <h3>Цель</h3><p>Застроить пустой город, построить производственную империю и обогнать конкурентов в рейтинге.</p>
-      <h3>Управление</h3><p>Разделы — в меню вверху: город (3D-карта), компания, предприятия, специалисты, стройки, финансы, отчёты, рынок, биржа предприятий, рейтинг и задания. На карте: левая кнопка мыши — двигать, правая — вращать, колесо — масштаб; на телефоне — один палец двигает, два — масштаб и поворот. Пробел — пауза, кнопки внизу справа — ускорить время.</p><h3>Время</h3><p>Игровой день длится минуту (настраивается на сервере). До нового дня — в шапке. Каждый день начисляются аренда, зарплаты, идут стройки и производство.</p><h3>Опыт и уровень предприятия</h3><p>Каждое предприятие копит опыт за производство, продажи, поставки, исследования и стройку. Звезда — уровень предприятия (до 100), «+N» — свободные уровни. Новое подразделение или улучшение подразделения требует свободного уровня (и денег на оборудование).</p><h3>Квалификация и оборудование</h3><p>У подразделения есть оборудование качества 1–10: лучше оборудование — больше выпуск и выше качество, но оно требует квалификации персонала (качество × 1,2). Квалификация = городская + обучение (до +4). Не хватает квалификации — эффективность падает. Оборудование считается в штуках (линии, тракторы, краны…): нехватка снижает выпуск, кнопка «Докупить» дозаполнит. Износ растёт только в работе; ремонт бесплатный, но часть единиц списывается. Выключенный цех платит 25% зарплаты.</p><h3>Уровень компании</h3><p>Компания копит опыт: 35% опыта своих предприятий и доход от зданий. Уровень (до 100) открывает новые виды предприятий (список ближайших — в профиле компании), специалистов (с 5-го), авторегулирование снабжения (с 7-го, у предприятия от 8-го уровня). За новые уровни — денежный бонус.</p>
+      <h3>Управление</h3><p>Разделы — в меню вверху: город (карта, стройки, здания), компания, предприятия (и специалисты), рынок (товары, цепочки, биржа), финансы (и отчёты), рейтинг; справа — задания, справка и настройки. На карте: левая кнопка мыши — двигать, правая — вращать, колесо — масштаб; на телефоне — один палец двигает, два — масштаб и поворот. Пробел — пауза, кнопки внизу справа — ускорить время.</p><h3>Время</h3><p>Игровой день длится минуту (настраивается на сервере). До нового дня — в шапке. Каждый день начисляются аренда, зарплаты, идут стройки и производство.</p><h3>Опыт и уровень предприятия</h3><p>Каждое предприятие копит опыт за производство, продажи, поставки, исследования и стройку. Звезда — уровень предприятия (до 100), «+N» — свободные уровни. Новое подразделение или улучшение подразделения требует свободного уровня (и денег на оборудование).</p><h3>Квалификация и оборудование</h3><p>У подразделения есть оборудование качества 1–10: лучше оборудование — больше выпуск и выше качество, но оно требует квалификации персонала (качество × 1,2). Квалификация = городская + обучение (до +4). Не хватает квалификации — эффективность падает. Оборудование считается в штуках (линии, тракторы, краны…): нехватка снижает выпуск, кнопка «Докупить» дозаполнит. Износ растёт только в работе; ремонт бесплатный, но часть единиц списывается. Выключенный цех платит 25% зарплаты.</p><h3>Уровень компании</h3><p>Компания копит опыт: 35% опыта своих предприятий и доход от зданий. Уровень (до 100) открывает новые виды предприятий (список ближайших — в профиле компании), специалистов (с 5-го), авторегулирование снабжения (с 7-го, у предприятия от 8-го уровня). За новые уровни — денежный бонус.</p>
       <h3>Налоги</h3><p>Раз в неделю — налог 25% с прибыли каждого предприятия и здания отдельно; убытки прошлых недель уменьшают налог. Финансовый отдел штаб-квартиры ограничивает деньги на счёте: с излишка списывается штраф 10% в неделю. Шахтёрский отдел ограничивает число видов добычи.</p>
       <h3>Охват магазина</h3><p>Покупатели — жители и офисные работники в радиусе магазина (3 клетки, до 4,5 с известностью). Арендаторы того же профиля и ваши точки рядом — конкуренты. Ассортимент растёт с уровнем торгового отдела. На карте города включите флажок «Магазины», чтобы увидеть охват.</p>
       <h3>Реклама и цены</h3><p>Магазины, рестораны и салоны покупают рекламу (40–100%) — растёт известность и число покупателей. Кнопка «Рекомендованные цены» выставит цены с учётом качества. Дороже 2,5× средней цены по городу товар не покупают.</p><h3>Штаб-квартира и специалисты</h3><p>Отделы штаб-квартиры ограничивают число рабочих, предприятий, продуктов и строек — повышайте их уровень. Специалисты с биржи ускоряют предприятие своей профессии и повышают качество.</p>

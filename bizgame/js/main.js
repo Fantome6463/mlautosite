@@ -3,6 +3,7 @@ import * as G from './game.js';
 import * as P from './production.js';
 import { World } from './world.js';
 import { UI } from './ui.js';
+import { Thumbs } from './thumbs.js';
 import { GOODS, BUILDINGS } from './data.js';
 
 const CYCLE_DAYS = 3; // полный цикл день/ночь в 3D
@@ -56,6 +57,7 @@ const world = new World(document.getElementById('scene'), {
   onPick: (i, j) => app.select(i, j),
 });
 app.world = world;
+app.thumbs = new Thumbs();
 const ui = new UI(app);
 const renderTop = () => ui.renderTop(app.dayMs - app.acc, app.speed);
 
