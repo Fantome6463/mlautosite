@@ -460,3 +460,5 @@ td.nw, .nw { white-space: nowrap; }
 .dlg-b { overflow: auto; }
 .tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: #f1f5f9; color: var(--muted); }
 .tag.own { background: #dcfce7; color: #166534; } .tag.rival { background: #fef3c7; color: #92400e; }
+input:disabled { background: #f1f5f9; color: var(--muted, #64748b); cursor: not-allowed; }
+.autosup { gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }

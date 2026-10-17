@@ -387,7 +387,7 @@ export function createEnterprise(s, type, sub, opts = {}) {
   const count = Object.values(s.enterprises).filter(e => e.type === type && e.sub === (sub || null)).length + 1;
   const e = {
     id: s.nextId++, type, sub: sub || null, name: opts.name?.trim() || `${def.name} №${count}`, invested: def.cost,
-    salary: s.marketSalary, divs: [], stock: {}, supply: {}, autoSell: {}, prices: {}, autoSupply: { on: false, weeks: 1 },
+    salary: s.marketSalary, divs: [], stock: {}, supply: {}, autoSell: {}, prices: {}, autoSupply: { on: true, days: 5, v2: true },
     research: null, resDir: 'q', progress: 0, lvl: 1, xp: 0, ad: 0, aware: BASE_AWARE, built: s.day, host: host ? host.id : null, last: emptyLast(), hist: [], flh: [],
   };
   e.divs.push(newDiv(s, e, recipe));
@@ -570,7 +570,7 @@ function makeListing(s) {
   const lvl = 1 + Math.floor(Math.random() * (2 + L / 3));
   const opts = recipesFor(type, sub);
   const e = { id: 0, type, sub, name: `${def.name} «${RIVALS[seller].name.replace(/^[^«]*«|».*$/g, '')}»`, invested: def.cost, salary: s.marketSalary,
-    divs: [], stock: {}, supply: {}, autoSell: {}, prices: {}, autoSupply: { on: false, weeks: 1 }, research: null, resDir: 'q', progress: 0,
+    divs: [], stock: {}, supply: {}, autoSell: {}, prices: {}, autoSupply: { on: true, days: 5, v2: true }, research: null, resDir: 'q', progress: 0,
     lvl, xp: 0, ad: 0, aware: BASE_AWARE, built: s.day, host: null, last: emptyLast(), hist: [], flh: [] };
   let left = lvl;
   const n = 1 + Math.floor(Math.random() * Math.min(lvl, 3));
@@ -675,8 +675,21 @@ export function divInfo(s, e, d) {
   return { maxOut: round2(maxOut), out: round2(out), limitBy };
 }
 // Потребность в сырье в день при полной загрузке всех подразделений
-// Авторегулирование снабжения (вики): с 7-го уровня компании для предприятий 8-го уровня и выше
-export const canAutoSupply = (s, e) => (s.compLvl || 1) >= FEATURES.autoSupply && (e.lvl || 1) >= AUTO_SUPPLY_ENT_LEVEL;
+// Авторегулирование снабжения доступно сразу: заказ в день подстраивается под расход и запас
+export const canAutoSupply = () => true;
+export const AUTO_DAYS = [2, 3, 5, 7, 14];
+// Ожидаемые продажи товара в день: по последней неделе, а без истории — по спросу района
+export function salesPerDay(s, e, g) {
+  const sold = (entFlow(e)[g]?.sold || 0) / Math.max(1, Math.min(7, (e.flh || []).length));
+  if (sold) return sold;
+  return ((GOODS[g].demand || 0.05) / 100) * Math.max(30, e.area?.pop || 60) * POP_SCALE * (entDef(e).reach || 1) * 0.5;
+}
+// Что авторегулирование держит в запасе: сырьё цехов и товары магазина, у которых выбран поставщик
+export function autoNeeds(s, e) {
+  const need = inputNeeds(s, e);
+  if (entDef(e).sells) for (const g in e.supply) if (e.supply[g]?.srcs?.length) need[g] = (need[g] || 0) + salesPerDay(s, e, g);
+  return need;
+}
 export function inputNeeds(s, e) {
   const need = {};
   for (const d of e.divs) {
@@ -717,16 +730,18 @@ export function productionTick(s, { spend, earn, fx, news }) {
     if (d.workers > d.target) d.workers = d.target;
   }
 
-  // авторегулирование снабжения: держать сырьё на N недель работы
+  // авторегулирование снабжения: держать запас на N дней расхода (сырьё цехов, продажи магазина)
   for (const e of list) {
-    if (!e.autoSupply?.on || !canAutoSupply(s, e)) continue;
-    const days = (e.autoSupply.weeks || 1) * 7;
-    const need = inputNeeds(s, e);
+    if (!e.autoSupply?.on) continue;
+    const days = e.autoSupply.days || 5;
+    const need = autoNeeds(s, e);
     for (const g in need) {
+      if (!(need[g] > 0)) continue;
       const want = need[g] * days - stockQty(e, g);
-      const qty = Math.max(0, Math.ceil(Math.min(Math.max(want / 3, need[g]), need[g] * 2)));
-      if (e.supply[g]) e.supply[g].qty = want > 0 ? qty : 0;
-      else setSupply(s, e, g, null, want > 0 ? qty : 0);
+      // дневной расход ± треть отклонения от целевого запаса, не больше двойного расхода — без скачков
+      const qty = Math.max(0, Math.ceil(Math.min(need[g] + want / 3, need[g] * 2)));
+      if (e.supply[g]) e.supply[g].qty = qty;
+      else if (qty > 0) setSupply(s, e, g, null, qty);
     }
   }
   // снабжение: каждое утро привозят товар от выбранного поставщика
@@ -1021,7 +1036,7 @@ export function migrateEnterprises(s) {
     for (const k of ['buy', 'autoSell', 'prices']) e[k] = Object.fromEntries(Object.entries(e[k] || {}).map(([g, v]) => [ren(g), v]).filter(([g]) => GOODS[g]));
     if (e.research) e.research = GOODS[ren(e.research)] ? ren(e.research) : null;
     e.divs = [{ id: s.nextId++, recipe: recipe && canMake(e, recipe) ? recipe : null, level: e.level || 1, workers: e.workers || 0, target: e.target || 0, on: true, wear: 0 }];
-    e.autoSupply ||= { on: false, days: 3 };
+    e.autoSupply ||= { on: true, days: 5 };
     e.lvl = Math.max(1, levelOf(e)); e.xp = 0;
     e.hist ||= []; e.flh ||= [];
     delete e.recipe; delete e.level; delete e.workers; delete e.target;
@@ -1030,7 +1045,8 @@ export function migrateEnterprises(s) {
     if (!e.lvl) { e.lvl = Math.max(1, levelOf(e)); e.xp = 0; }
     e.aware ??= 0.5; e.ad ??= 0; e.resDir ||= 'q';
     for (const d of e.divs) { d.eq ??= 3; d.train ??= 0; d.trainOn ??= false; d.eqN ??= eqNeed(e, d); }
-    if (e.autoSupply && e.autoSupply.weeks == null) e.autoSupply.weeks = clamp(Math.round((e.autoSupply.days || 7) / 7), 1, 5);
+    // авторегулирование стало доступно всем — один раз включаем его в старых сохранениях
+    if (!e.autoSupply?.v2) e.autoSupply = { on: true, days: e.autoSupply?.weeks ? Math.min(14, e.autoSupply.weeks * 7) : 5, v2: true };
     if (e.type === 'mine' && !e.sub) e.sub = { ore: 'ore', coal: 'coal', stone: 'stone', sand: 'sand', clay: 'clay', gold: 'gold' }[e.divs[0]?.recipe] || 'stone';
   }
   // закупки и поставки старого формата → снабжение с выбором поставщика

@@ -107,7 +107,7 @@ export const companyXpNeed = l => Math.round(800000 * Math.pow(l, 1.8));
 // Денежный бонус за новый уровень (вики «Развитие компании», в масштабе нашей экономики)
 export const LEVEL_BONUS = { 2: 1000000, 3: 1500000, 4: 2000000, 5: 2500000, 6: 2500000, 7: 3000000, 8: 3000000, 9: 3500000, 10: 4000000, 11: 4500000, 12: 5000000, 13: 5500000, 14: 6000000, 15: 6500000 };
 // Возможности, открывающиеся с уровнем компании
-export const FEATURES = { specialists: 5, autoSupply: 7, loans: 11 };
+export const FEATURES = { specialists: 5, loans: 11 };
 export const AUTO_SUPPLY_ENT_LEVEL = 8;
 
 // Строительные компании-подрядчики
