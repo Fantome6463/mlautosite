@@ -2,7 +2,7 @@
 // Рендерятся по запросу одним небольшим WebGL-холстом и кэшируются как data-URL.
 import * as THREE from 'three';
 import { BUILDINGS } from './data.js';
-import { BUILDING_MODELS, facade, tree, box, cyl, mat, mesh, signMat } from './world.js';
+import { BUILDING_MODELS, facade, tree, box, cyl, mat, mesh, signMat, hipRoof } from './world.js';
 import { entColor } from './icons.js';
 
 const SIZE = 192;
@@ -16,12 +16,7 @@ const texFor = type => (TEX[type] ||= {
 }[{ mixed: 'residential', mall: 'office' }[type] || type]?.() || facade('#e5e7eb', ['#94a3b8'], ['#fff'], null));
 
 const ground = (w = 9, d = 9, c = '#a3c585') => box(w, 0.4, d, c, 0, -0.4, 0);
-const roofGable = (w, d, h, color, x = 0, y = 0, z = 0) => {
-  const g = new THREE.CylinderGeometry(0.01, w / 2 * 1.15, h, 4, 1);
-  const m = mesh(g, mat(color), x, y + h / 2, z);
-  m.rotation.y = Math.PI / 4; m.scale.set(1, 1, d / w);
-  return m;
-};
+const roofGable = (w, d, h, color, x = 0, y = 0, z = 0) => hipRoof(w, d, h, color, x, y, z);
 
 // Модели предприятий: по виду, с акцентным цветом вида
 const ENT_MODELS = {
@@ -234,7 +229,7 @@ export class Thumbs {
     this.holder.clear(); this.holder.add(g);
     g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     const bb = new THREE.Box3().setFromObject(g), size = bb.getSize(new THREE.Vector3()), c = bb.getCenter(new THREE.Vector3());
-    const half = Math.max(size.x, size.z) * 0.5 + size.y * 0.22;
+    const half = Math.max(Math.max(size.x, size.z) * 0.62, size.y * 0.6, (Math.max(size.x, size.z) * 0.5 + size.y * 0.25));
     const cam = new THREE.OrthographicCamera(-half, half, half, -half, 0.1, 200);
     cam.position.set(c.x + 22, c.y + 18, c.z + 22); cam.lookAt(c);
     this.r.render(this.scene, cam);

@@ -107,6 +107,15 @@ export const FACADES = {
   ],
 };
 
+// Четырёхскатная крыша точно по контуру здания (пирамида повёрнута в геометрии, потом растянута по сторонам)
+export function hipRoof(w, d, hgt, color, x, y, z) {
+  const geo = new THREE.CylinderGeometry(0.02, Math.SQRT1_2, hgt, 4, 1);
+  geo.rotateY(Math.PI / 4);
+  const m = mesh(geo, mat(color), x, y + hgt / 2, z);
+  m.scale.set(w, 1, d);
+  return m;
+}
+
 // Крыши: вертолётная площадка, сад, техника с антенной, солнечные панели, бак с водой
 function roofKit(g, b, kind, w, d, y, salt = 3) {
   const v = vr(b, kind === 'office' ? 3 : 3, salt);
@@ -134,7 +143,7 @@ function makeOffice(b, tex) {
     // восьмигранная башня с короной
     const r = 3.4, m = W(r * 6.2, b.floors);
     g.add(mesh(new THREE.CylinderGeometry(r, r, h, 8), m, 0, 0.3 + h / 2, 0));
-    g.add(cyl(r + 0.2, r + 0.2, 0.4, col, 0, 0.3 + h, 0, 8));
+    g.add(cyl(r + 0.2, r + 0.2, 0.16, col, 0, 0.3 + h, 0, 8), cyl(r + 0.2, r + 0.2, 0.3, ROOFS[vr(b, ROOFS.length, 9)], 0, 0.46 + h, 0, 8));
     g.add(cyl(r * 0.6, r * 0.8, 1.2, '#cbd5e1', 0, 0.7 + h, 0, 8));
     if (b.floors >= 9) g.add(cyl(0.05, 0.12, 3.5, '#e5e7eb', 0, 1.9 + h, 0, 6));
   } else if (shape === 2) {
@@ -143,7 +152,8 @@ function makeOffice(b, tex) {
     g.add(box(3, h, 4.2, W(3, b.floors), -1.9, 0.3, 0), box(3, h2, 4.2, W(3, Math.round(h2 / FLOOR)), 1.9, 0.3, 0));
     g.add(box(1, 1.6, 2, mat('#7dd3fc', { metalness: 0.4, roughness: 0.15 }), 0, 0.3 + h2 * 0.6, 0));
     cap(g, b, 3.2, 4.4, -1.9, 0.3 + h, 0); cap(g, b, 3.2, 4.4, 1.9, 0.3 + h2, 0);
-    roofKit(g, b, 'office', 3, 4, 0.65 + h2, 4);
+    const rk = new THREE.Group(); rk.position.x = 1.9; g.add(rk);
+    roofKit(rk, b, 'office', 3, 4, 0.65 + h2, 4);
   } else if (shape === 3) {
     // ступенчатый — три яруса
     const f1 = Math.max(2, Math.round(b.floors * 0.5)), f2 = Math.max(1, Math.round(b.floors * 0.3)), f3 = Math.max(1, b.floors - f1 - f2);
@@ -159,7 +169,7 @@ function makeOffice(b, tex) {
     g.add(box(w, low * FLOOR, d, W(w, low), 0, 0.3, 0));
     if (low < b.floors) {
       g.add(box(w - 2, (b.floors - low) * FLOOR, d - 1.6, W(w - 2, b.floors - low), 0, 0.3 + low * FLOOR, 0));
-      g.add(box(w + 0.2, 0.35, d + 0.2, col, 0, 0.3 + low * FLOOR, 0));
+      g.add(box(w + 0.2, 0.35, d + 0.2, '#94a3b8', 0, 0.3 + low * FLOOR, 0));
     }
     const tw = low < b.floors ? w - 1.8 : w + 0.2, td = low < b.floors ? d - 1.4 : d + 0.2;
     cap(g, b, tw, td, 0, 0.3 + h, 0);
@@ -190,7 +200,7 @@ function makeResidential(b, tex) {
   }
   const balconies = (x, ww, dd, fl, y0) => {
     if (vr(b, 2, 7)) for (let f = 0; f < fl; f += 2) g.add(box(ww * 0.75, 0.16, 0.6, acc, x, y0 + f * FLOOR + 0.1, dd / 2 + 0.3));
-    else for (const dx of [-ww * 0.28, ww * 0.28]) g.add(box(0.7, fl * FLOOR, 0.4, mat(acc, { roughness: 0.9 }), x + dx, y0, dd / 2 + 0.2));
+    else for (const dx of [-ww * 0.3, ww * 0.3]) g.add(box(0.4, fl * FLOOR - 0.3, 0.25, mat(acc, { roughness: 0.9 }), x + dx, y0 + 0.15, dd / 2 + 0.12));
   };
   if (shape === 1) {
     // Г-образный дом: длинный корпус сзади и крыло
@@ -211,8 +221,7 @@ function makeResidential(b, tex) {
     // невысокий дом со скатной крышей
     g.add(box(w, upper * FLOOR, d, W(w, upper), 0, ground, 0));
     balconies(0, w, d, upper, ground);
-    const roof = mesh(new THREE.CylinderGeometry(0.01, 4.6, 2.4, 4, 1), mat(['#7c2d12', '#334155', '#166534'][vr(b, 3, 8)]), 0, h + 1.2, 0);
-    roof.rotation.y = Math.PI / 4; roof.scale.set(1.15, 1, 0.9); g.add(roof);
+    g.add(hipRoof(w + 0.4, d + 0.4, 2.4, ['#7c2d12', '#334155', '#166534'][vr(b, 3, 8)], 0, h, 0));
   } else if (shape === 3) {
     // секционный дом: две секции разной высоты
     const up2 = Math.max(2, upper - 3);
@@ -244,7 +253,7 @@ function makeMall(b, tex) {
   g.add(box(3.2, 1.2, 0.2, signMat(col), 0, 0.3 + h + 0.8, d / 2 - 2.6));
   if (shape === 1) { // скруглённый угол-ротонда со стеклом
     const r = mesh(new THREE.CylinderGeometry(2.2, 2.2, h + 1.2, 16), mat('#7dd3fc', { roughness: 0.1, metalness: 0.5, transparent: true, opacity: 0.9 }), -w / 2 + 1.6, 0.3 + (h + 1.2) / 2, d / 2 - 2.2);
-    g.add(r, cyl(2.4, 2.4, 0.3, col, -w / 2 + 1.6, 1.5 + h, d / 2 - 2.2, 16));
+    g.add(r, cyl(2.4, 2.4, 0.3, ROOFS[vr(b, ROOFS.length, 9)], -w / 2 + 1.6, 1.5 + h, d / 2 - 2.2, 16));
   } else if (shape === 2) { // стеклянный купол атриума
     g.add(mesh(new THREE.SphereGeometry(2.4, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat('#bae6fd', { roughness: 0.1, metalness: 0.4, transparent: true, opacity: 0.85 }), 0, 0.8 + h, -1));
   } else g.add(box(1.8, 1, 1.4, '#94a3b8', 2.6, 0.8 + h, -2.2), box(1.8, 1, 1.4, '#94a3b8', -2.6, 0.8 + h, -2.2));
@@ -397,13 +406,13 @@ export class World {
 
     const s = this.scene = new THREE.Scene();
     s.background = new THREE.Color('#9fd3f0');
-    s.fog = new THREE.Fog('#9fd3f0', 260, 520);
+    s.fog = new THREE.Fog('#9fd3f0', 420, 830);
 
-    const cam = this.camera = new THREE.PerspectiveCamera(42, 1, 1, 1200);
-    cam.position.set(85, 95, 115);
+    const cam = this.camera = new THREE.PerspectiveCamera(26, 1, 2, 2000); // узкий угол — почти изометрия, высокие дома не заваливаются
+    cam.position.set(136, 152, 184);
     const c = this.controls = new OrbitControls(cam, r.domElement);
     c.enableDamping = true; c.dampingFactor = 0.08;
-    c.maxPolarAngle = 1.2; c.minDistance = 25; c.maxDistance = 300;
+    c.maxPolarAngle = 1.2; c.minDistance = 40; c.maxDistance = 480;
     c.screenSpacePanning = false;
     c.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
     c.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
