@@ -422,6 +422,7 @@ export class UI {
       ? `<button class="isotile" data-act="enttab-go" data-k="divs" title="${esc(P.divName(e, x))}">${eTile(e, 'lg')}<span class="star sm">${x.level}</span>${x.recipe ? `<b class="ge">${GOODS[x.recipe].icon}</b><span class="slot">${GOODS[x.recipe].name}</span>` : ''}${x.on ? '' : '<em>выкл.</em>'}</button>`
       : `<button class="isotile empty ${P.freeLevels(e) < 1 ? 'nofree' : ''}" data-act="adddiv" title="${P.freeLevels(e) < 1 ? 'Нужен свободный уровень предприятия' : 'Новое подразделение — ' + fmt(P.divCost(e))}"><span>${ic(P.freeLevels(e) < 1 ? 'lock' : 'plus')}${P.freeLevels(e) < 1 ? 'нужен свободный уровень' : 'новое · ' + fmtShort(P.divCost(e))}</span></button>`).join('')}</div>
     <div class="actions"><input type="text" value="${esc(e.name)}" data-act="ename" maxlength="40" style="width:240px">
+      <button class="btn" data-act="gopage" data-k="exchange" data-ex="sell">${ic('handshake')} Продать на бирже (оценка ${fmt(P.entValue(s, e))})</button>
       <button class="btn danger" data-act="eclose">Продать государству (${fmt(P.stateBuyout(s, e))})</button></div>`;
   }
 
@@ -751,9 +752,22 @@ export class UI {
       }
       case 'consdel': this.app.act(() => P.removeSupply(s, s.enterprises[+t.dataset.to], t.dataset.good)); this.renderPage(); break;
       case 'wtab': this.winTab = t.dataset.tab; this.renderPage(); break;
+      case 'extab': this.exTab = t.dataset.k; this.renderPage(); break;
+      case 'exbuy': {
+        const r = run(() => P.buyListing(s, +t.dataset.id));
+        if (r?.enterprise) { this.toast(`«${r.enterprise.name}» теперь ваше`); this.app.selectEnt(r.enterprise.id); } else this.renderPage();
+        break;
+      }
+      case 'exsell': {
+        const x = s.enterprises[+t.dataset.id];
+        if (confirm(`Продать «${x.name}» за ${fmt(+t.dataset.p)}?`)) { run(() => P.sellEnterprise(s, x.id, +t.dataset.r, +t.dataset.p)); this.toast(`Продано за ${fmt(+t.dataset.p)}`); }
+        this.renderPage(); break;
+      }
+      case 'exlist': run(() => P.listEnterprise(s, +t.dataset.id, +$('#exp' + t.dataset.id).value)); this.renderPage(); break;
+      case 'exunlist': run(() => P.listEnterprise(s, +t.dataset.id, 0)); this.renderPage(); break;
       case 'cotab': this.coTab = t.dataset.tab; this.renderPage(); this.markNav(); break;
       case 'tocity': ev.preventDefault(); this.showCity(); break;
-      case 'gopage': ev.preventDefault(); this.openPage(t.dataset.k, t.dataset.tab); break;
+      case 'gopage': ev.preventDefault(); if (t.dataset.ex) this.exTab = t.dataset.ex; this.openPage(t.dataset.k, t.dataset.tab); break;
       case 'entfilter': this.entFilter = t.dataset.k || null; this.renderPage(); break;
       case 'finsub': ev.preventDefault(); this.finSub = t.dataset.k; this.txPage = 0; this.renderPage(); break;
       case 'txpage': this.txPage = +t.dataset.p; this.renderPage(); break;
@@ -863,7 +877,7 @@ export class UI {
   }
 
   titled(name) {
-    const t = { market: ['trend', 'Рынок'], rating: ['trophy', 'Рейтинг компаний'], quests: ['tasks', 'Задания'], help: ['help', 'Как играть'] }[name];
+    const t = { market: ['trend', 'Рынок'], exchange: ['handshake', 'Биржа предприятий'], rating: ['trophy', 'Рейтинг компаний'], quests: ['tasks', 'Задания'], help: ['help', 'Как играть'] }[name];
     return `<div class="page-title"><span class="pt-ic">${ic(t[0])}</span><h1>${t[1]}</h1></div>${this[`win_${name}`](this.s)}`;
   }
 
@@ -1348,6 +1362,41 @@ export class UI {
   }
 
   page_market(s) { return this.titled('market'); }
+  page_exchange(s) { return this.titled('exchange'); }
+
+  // Биржа предприятий: купить у конкурентов, продать им или выставить на продажу по своей цене
+  win_exchange(s) {
+    if (!s.entMarket) P.refreshListings(s);
+    this.exTab ||= 'buy';
+    const tabs = [['buy', 'Купить'], ['sell', 'Продать'], ['log', 'Сделки']];
+    let h = `<div class="tabs">${tabs.map(([k, n]) => `<button data-act="extab" data-k="${k}" class="${this.exTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
+    const divs = e => e.divs.map(d => `<span title="${esc(P.divName(e, d))}: уровень ${d.level}, оборудование кач. ${(d.eq || 3).toFixed(1)}">${d.recipe ? `<span class="ge">${GOODS[d.recipe].icon}</span>` : ''}<span class="star sm">${d.level}</span></span>`).join(' ');
+    if (this.exTab === 'buy') {
+      const L = G.companyLevel(s);
+      h += `<p class="hint">Компании-конкуренты продают свои заводы, фермы, шахты и склады — с подразделениями, оборудованием и уровнем. Предложения обновляются раз в неделю.
+        Купленное предприятие начинает работать сразу: наймите людей и настройте снабжение.</p>
+        <table class="grid"><tr><th>Предприятие</th><th>Продавец</th><th>Уровень</th><th>Подразделения</th><th class="r">Оценка</th><th class="r">Цена</th><th class="r">Снимут через</th><th></th></tr>
+        ${s.entMarket.listings.map(x => { const e = x.ent, d = entDef(e), lock = L < d.minLevel;
+          return `<tr><td><span class="nm">${eTile(e, 'sm')}${esc(e.name)}</span><div class="hint">${d.name}</div></td><td><span class="dot" style="background:${RIVALS[x.seller].color}"></span>${esc(RIVALS[x.seller].name)}</td>
+            <td>${lvlStar(e, 'sm')}</td><td class="prods sm">${divs(e)}</td><td class="r">${fmt(x.value)}</td>
+            <td class="r ${x.price < x.value ? 'pos' : ''}"><b>${fmt(x.price)}</b></td><td class="r">${x.until - s.day} дн.</td>
+            <td>${lock ? `<span class="hint">${ic('lock')} с ${d.minLevel}-го уровня</span>` : `<button class="btn small primary" data-act="exbuy" data-id="${x.lid}" ${s.money < x.price ? 'disabled' : ''}>Купить</button>`}</td></tr>`; }).join('') || '<tr><td colspan="8" class="hint">Предложений нет</td></tr>'}</table>`;
+    } else if (this.exTab === 'sell') {
+      const ents = Object.values(s.enterprises);
+      h += `<p class="hint">Конкуренты делают ставки на ваши предприятия (раз в неделю — новые). Можно продать сразу по лучшей ставке или выставить своё предприятие по своей цене:
+        если цена не выше оценки более чем на 20%, покупатель скоро найдётся. Государство выкупает за половину активов — на бирже обычно выгоднее.</p>
+        ${ents.length ? `<table class="grid"><tr><th>Предприятие</th><th>Уровень</th><th class="r">Прибыль в день</th><th class="r">Оценка</th><th>Лучшая ставка</th><th>Своя цена</th></tr>
+        ${ents.map(e => { const b = P.bidsFor(s, e)[0], w = e.hist.slice(-14), pr = w.length ? w.reduce((a, x) => a + x.rev - x.exp, 0) / w.length : 0;
+          return `<tr><td><a href="#" data-act="openent" data-id="${e.id}">${entHtml(e)}</a></td><td>${lvlStar(e, 'sm')}</td><td class="r ${pr < 0 ? 'neg' : ''}">${fmt(pr)}</td><td class="r">${fmt(P.entValue(s, e))}</td>
+            <td>${b ? `${fmt(b.price)} <span class="hint">${esc(b.name)}</span> <button class="btn small" data-act="exsell" data-id="${e.id}" data-r="${b.i}" data-p="${b.price}">Продать</button>` : '<span class="hint">ставок нет</span>'}</td>
+            <td><input type="number" min="0" step="10000" id="exp${e.id}" value="${e.forSale || Math.round(P.entValue(s, e) / 10000) * 10000}" style="width:130px">
+              ${e.forSale ? `<button class="btn small" data-act="exlist" data-id="${e.id}">Изменить</button> <button class="btn small" data-act="exunlist" data-id="${e.id}">Снять</button> <span class="pos">в продаже</span>`
+                : `<button class="btn small primary" data-act="exlist" data-id="${e.id}">Выставить</button>`}</td></tr>`; }).join('')}</table>` : '<p class="hint">У вас пока нет предприятий.</p>'}`;
+    } else {
+      h += (s.entMarket.log || []).length ? `<div class="news-list">${s.entMarket.log.map(l => `<div><b>${shortDate(l.day)}</b>${esc(l.text)}</div>`).join('')}</div>` : '<p class="hint">Сделок пока не было.</p>';
+    }
+    return h;
+  }
   page_rating(s) { return this.titled('rating'); }
   page_quests(s) { return this.titled('quests'); }
   page_help(s) { return this.titled('help'); }
@@ -1456,7 +1505,7 @@ export class UI {
   win_help() {
     return `<div class="help">
       <h3>Цель</h3><p>Застроить пустой город, построить производственную империю и обогнать конкурентов в рейтинге.</p>
-      <h3>Управление</h3><p>Разделы — в меню вверху: город (3D-карта), компания, предприятия, специалисты, стройки, финансы, отчёты, рынок, рейтинг и задания. На карте: левая кнопка мыши — двигать, правая — вращать, колесо — масштаб; на телефоне — один палец двигает, два — масштаб и поворот. Пробел — пауза, кнопки внизу справа — ускорить время.</p><h3>Время</h3><p>Игровой день длится минуту (настраивается на сервере). До нового дня — в шапке. Каждый день начисляются аренда, зарплаты, идут стройки и производство.</p><h3>Опыт и уровень предприятия</h3><p>Каждое предприятие копит опыт за производство, продажи, поставки, исследования и стройку. Звезда — уровень предприятия (до 100), «+N» — свободные уровни. Новое подразделение или улучшение подразделения требует свободного уровня (и денег на оборудование).</p><h3>Квалификация и оборудование</h3><p>У подразделения есть оборудование качества 1–10: лучше оборудование — больше выпуск и выше качество, но оно требует квалификации персонала (качество × 1,2). Квалификация = городская + обучение (до +4). Не хватает квалификации — эффективность падает. Оборудование считается в штуках (линии, тракторы, краны…): нехватка снижает выпуск, кнопка «Докупить» дозаполнит. Износ растёт только в работе; ремонт бесплатный, но часть единиц списывается. Выключенный цех платит 25% зарплаты.</p><h3>Уровень компании</h3><p>Компания копит опыт: 35% опыта своих предприятий и доход от зданий. Уровень (до 100) открывает новые виды предприятий (список ближайших — в профиле компании), специалистов (с 5-го), авторегулирование снабжения (с 7-го, у предприятия от 8-го уровня). За новые уровни — денежный бонус.</p>
+      <h3>Управление</h3><p>Разделы — в меню вверху: город (3D-карта), компания, предприятия, специалисты, стройки, финансы, отчёты, рынок, биржа предприятий, рейтинг и задания. На карте: левая кнопка мыши — двигать, правая — вращать, колесо — масштаб; на телефоне — один палец двигает, два — масштаб и поворот. Пробел — пауза, кнопки внизу справа — ускорить время.</p><h3>Время</h3><p>Игровой день длится минуту (настраивается на сервере). До нового дня — в шапке. Каждый день начисляются аренда, зарплаты, идут стройки и производство.</p><h3>Опыт и уровень предприятия</h3><p>Каждое предприятие копит опыт за производство, продажи, поставки, исследования и стройку. Звезда — уровень предприятия (до 100), «+N» — свободные уровни. Новое подразделение или улучшение подразделения требует свободного уровня (и денег на оборудование).</p><h3>Квалификация и оборудование</h3><p>У подразделения есть оборудование качества 1–10: лучше оборудование — больше выпуск и выше качество, но оно требует квалификации персонала (качество × 1,2). Квалификация = городская + обучение (до +4). Не хватает квалификации — эффективность падает. Оборудование считается в штуках (линии, тракторы, краны…): нехватка снижает выпуск, кнопка «Докупить» дозаполнит. Износ растёт только в работе; ремонт бесплатный, но часть единиц списывается. Выключенный цех платит 25% зарплаты.</p><h3>Уровень компании</h3><p>Компания копит опыт: 35% опыта своих предприятий и доход от зданий. Уровень (до 100) открывает новые виды предприятий (список ближайших — в профиле компании), специалистов (с 5-го), авторегулирование снабжения (с 7-го, у предприятия от 8-го уровня). За новые уровни — денежный бонус.</p>
       <h3>Налоги</h3><p>Раз в неделю — налог 25% с прибыли каждого предприятия и здания отдельно; убытки прошлых недель уменьшают налог. Финансовый отдел штаб-квартиры ограничивает деньги на счёте: с излишка списывается штраф 10% в неделю. Шахтёрский отдел ограничивает число видов добычи.</p>
       <h3>Охват магазина</h3><p>Покупатели — жители и офисные работники в радиусе магазина (3 клетки, до 4,5 с известностью). Арендаторы того же профиля и ваши точки рядом — конкуренты. Ассортимент растёт с уровнем торгового отдела. На карте города включите флажок «Магазины», чтобы увидеть охват.</p>
       <h3>Реклама и цены</h3><p>Магазины, рестораны и салоны покупают рекламу (40–100%) — растёт известность и число покупателей. Кнопка «Рекомендованные цены» выставит цены с учётом качества. Дороже 2,5× средней цены по городу товар не покупают.</p><h3>Штаб-квартира и специалисты</h3><p>Отделы штаб-квартиры ограничивают число рабочих, предприятий, продуктов и строек — повышайте их уровень. Специалисты с биржи ускоряют предприятие своей профессии и повышают качество.</p>
@@ -1470,6 +1519,8 @@ export class UI {
       сено, комбикорм и ветпрепараты → коровник, курятник, свинарник → молоко, яйца, мясо; руда и уголь → металлургия → сталь → машиностроение → двигатели, станки, тракторы, горное оборудование.</p>
       <h3>Снабжение и поставщики</h3><p>На вкладке «Снабжение» предприятия для каждого товара выберите поставщика и объём в день: склады города, компании-конкуренты
       (у каждой своя цена и качество) или ваше собственное предприятие — тогда товар идёт по себестоимости, плюс 1% за доставку. Отгрузку можно настроить и со стороны поставщика — на вкладке «Сбыт».</p>
+      <h3>Биржа предприятий</h3><p>Конкуренты продают свои предприятия — с подразделениями, уровнем и оборудованием. Свои предприятия можно продать по лучшей ставке
+      конкурента или выставить по своей цене: если она не выше оценки больше чем на 20%, покупатель найдётся за несколько дней.</p>
       <h3>Оборудование</h3><p>Линии, тракторы, горное оборудование, краны, холодильники — это товары. Их покупают у поставщиков (или делают на своём машиностроительном и электронном заводе)
       на вкладке «Подразделения». Качество оборудования = качество купленного товара.</p>
       <h3>Цены</h3><p>Цены реальные, в рублях: хлеб ~35 ₽ оптом и ~50 ₽ в магазине, молоко 35 ₽/л, сталь 60 000 ₽/т, автомобиль 1,2 млн ₽, зарплата рабочего 2 500 ₽ в день.

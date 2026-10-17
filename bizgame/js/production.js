@@ -6,7 +6,7 @@ import {
   SHOP_TURNOVER_PER_WORKER, TRANSPORT_RATE, POP_SCALE, depotOf, hqLimit, PROFESSIONS, SPEC_NAMES, SPEC_FACES, specSalary,
   EQUIP, GAME_YEAR, FEATURES, AUTO_SUPPLY_ENT_LEVEL, TENANT_PROFILE, RIVALS,
 } from './data.js';
-import { entDef, canMake, recipesFor, sellsList, accepts } from './catalog.js';
+import { entDef, canMake, recipesFor, sellsList, accepts, unlockLevel } from './catalog.js';
 import { pay as ledgerPay, flow } from './ledger.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -386,11 +386,119 @@ export function closeEnterprise(s, id) {
   if (!e) return 0;
   const refund = stateBuyout(s, e);
   ledgerPay(s, refund, 'sellEnt', { party: 'Государство', from: e.name, type: 'Продажа предприятия государству' });
+  dropEnterprise(s, id);
+  return refund;
+}
+function dropEnterprise(s, id) {
   for (const x of s.specs || []) if (x.job === id) x.job = null;
   delete s.enterprises[id];
   // получатели переходят на склады города
   for (const x of Object.values(s.enterprises)) for (const g in x.supply || {}) if (x.supply[g].src === id) x.supply[g].src = inDepot(g) ? 'depot' : null;
-  return refund;
+}
+
+// ---------- биржа предприятий: покупка и продажа между вами и компаниями-конкурентами ----------
+// Оценка: оборудование и вложения + товары на складе + премия за уровень + доходность последних двух недель
+export function entValue(s, e) {
+  let stock = 0;
+  for (const g in e.stock) stock += e.stock[g].qty * s.prices[g] * 0.6;
+  const prem = entDef(e).cost * 0.08 * ((e.lvl || 1) - 1);
+  const w = (e.hist || []).slice(-14);
+  const profit = w.length ? w.reduce((a, x) => a + x.rev - x.exp, 0) / w.length : 0;
+  return Math.max(0, Math.round(e.invested * 0.6 + stock + prem + Math.max(0, profit) * 20));
+}
+const weekOf = s => Math.floor(s.day / 7);
+const frac = (...k) => (hash(k.join(':'), 3) % 1000) / 1000;
+// Ставки конкурентов на ваше предприятие (меняются раз в неделю)
+export const bidsFor = (s, e) => RIVALS.map((r, i) => ({ i, name: r.name, price: Math.round(entValue(s, e) * (0.72 + 0.23 * frac(e.id, i, weekOf(s))) / 10000) * 10000 }))
+  .filter(b => b.price > 0 && s.rivals[b.i].worth > b.price).sort((a, b) => b.price - a.price);
+function logDeal(s, text) { (s.entMarket.log ||= []).unshift({ day: s.day, text }); s.entMarket.log.length = Math.min(40, s.entMarket.log.length); }
+// Продать предприятие конкуренту
+export function sellEnterprise(s, id, rival, price) {
+  const e = s.enterprises[id];
+  if (!e) return { error: 'Предприятие не найдено' };
+  const r = s.rivals[rival];
+  ledgerPay(s, price, 'sellEnt', { party: r.name, from: e.name, type: 'Продажа предприятия на бирже' });
+  r.worth -= price * 0.3;
+  logDeal(s, `Вы продали «${e.name}» компании ${r.name} за ${price.toLocaleString('ru-RU')} ₽`);
+  dropEnterprise(s, id);
+  return { ok: true, price };
+}
+// Выставить на продажу по своей цене (0 — снять)
+export function listEnterprise(s, id, price) {
+  const e = s.enterprises[id];
+  if (!e) return { error: 'Предприятие не найдено' };
+  e.forSale = price > 0 ? Math.round(price) : null;
+  return { ok: true };
+}
+// Предложения конкурентов: виртуальные предприятия (заводы, фермы, шахты…) с подразделениями и оборудованием
+function makeListing(s) {
+  const L = s.compLvl || 1;
+  const kinds = [];
+  for (const t in ENTERPRISES) {
+    const T = ENTERPRISES[t];
+    if (T.later || T.sells) continue;
+    for (const sb of T.subs ? Object.keys(T.subs) : [null]) if (unlockLevel(t, sb) <= L + 6 && recipesFor(t, sb).length + (t === 'warehouse' || t === 'construction' || t === 'lab' ? 1 : 0)) kinds.push([t, sb]);
+  }
+  const [type, sub] = kinds[Math.floor(Math.random() * kinds.length)];
+  const def = entDef({ type, sub }), seller = Math.floor(Math.random() * RIVALS.length);
+  const lvl = 1 + Math.floor(Math.random() * (2 + L / 3));
+  const opts = recipesFor(type, sub);
+  const e = { id: 0, type, sub, name: `${def.name} «${RIVALS[seller].name.replace(/^[^«]*«|».*$/g, '')}»`, invested: def.cost, salary: s.marketSalary,
+    divs: [], stock: {}, supply: {}, autoSell: {}, prices: {}, autoSupply: { on: false, weeks: 1 }, research: null, resDir: 'q', progress: 0,
+    lvl, xp: 0, ad: 0, aware: BASE_AWARE, built: s.day, host: null, last: emptyLast(), hist: [], flh: [] };
+  let left = lvl;
+  const n = Math.min(MAX_DIVS, 1 + Math.floor(Math.random() * Math.min(lvl, 3)));
+  for (let k = 0; k < n && left > 0; k++) {
+    const level = k === n - 1 ? left : 1 + Math.floor(Math.random() * Math.max(1, left - (n - k - 1)));
+    left -= level;
+    const d = { id: 0, recipe: opts.length ? opts[Math.floor(Math.random() * opts.length)] : null, level, workers: 0, target: def.workers * level, on: true,
+      wear: Math.round(Math.random() * 40) / 100, eq: Math.round((2.5 + Math.random() * 3) * 10) / 10, train: Math.round(Math.random() * 20) / 10, trainOn: false };
+    d.eqN = eqNeed(e, d);
+    e.divs.push(d);
+    if (k) e.invested += divCost(e);
+    for (let l = 1; l < level; l++) e.invested += Math.round(def.cost * 0.5 * l);
+  }
+  const value = entValue(s, e);
+  return { lid: s.nextId++, seller, ent: e, value, price: Math.round(value * (0.85 + Math.random() * 0.4) / 10000) * 10000, until: s.day + 14 };
+}
+export function refreshListings(s) {
+  s.entMarket ||= { listings: [], log: [] };
+  s.entMarket.listings = s.entMarket.listings.filter(x => x.until > s.day);
+  while (s.entMarket.listings.length < 6) s.entMarket.listings.push(makeListing(s));
+}
+// Купить предприятие у конкурента
+export function buyListing(s, lid) {
+  const m = s.entMarket, x = m?.listings.find(l => l.lid === lid);
+  if (!x) return { error: 'Предложение уже снято' };
+  const e = x.ent, def = entDef(e);
+  if ((s.compLvl || 1) < def.minLevel) return { error: `Нужен ${def.minLevel}-й уровень компании` };
+  if (Object.keys(s.enterprises).length >= hqLimit(s, 'manage')) return { error: `Управляющий отдел: лимит ${hqLimit(s, 'manage')} предприятий` };
+  if (e.type === 'mine' && !minedTypes(s).has(e.sub) && minedTypes(s).size >= hqLimit(s, 'mining')) return { error: 'Шахтёрский отдел: лимит видов ископаемых' };
+  const fresh = e.divs.map(d => d.recipe).filter(r => r && !products(s).has(r));
+  if (new Set(fresh).size + products(s).size > hqLimit(s, 'prod')) return { error: `Производственный отдел: не больше ${hqLimit(s, 'prod')} разных продуктов` };
+  if (s.money < x.price) return { error: `Нужно ${x.price.toLocaleString('ru-RU')} ₽` };
+  ledgerPay(s, -x.price, 'buyEnt', { party: RIVALS[x.seller].name, from: e.name, type: 'Покупка предприятия на бирже' });
+  s.rivals[x.seller].worth += x.price * 0.3;
+  e.id = s.nextId++; e.built = s.day;
+  for (const d of e.divs) d.id = s.nextId++;
+  s.enterprises[e.id] = e;
+  m.listings = m.listings.filter(l => l !== x);
+  logDeal(s, `Вы купили «${e.name}» у ${RIVALS[x.seller].name} за ${x.price.toLocaleString('ru-RU')} ₽`);
+  return { enterprise: e };
+}
+// День биржи: новые предложения, ваши лоты покупают, если цена разумная
+function marketTick(s, news) {
+  if (!s.entMarket || s.day % 7 === 0) refreshListings(s);
+  for (const e of Object.values(s.enterprises)) {
+    if (!e.forSale) continue;
+    const v = entValue(s, e);
+    const chance = clamp((v * 1.2 - e.forSale) / (v * 0.5 + 1), 0, 1) * 0.35;
+    if (Math.random() < chance) {
+      const rival = Math.floor(Math.random() * RIVALS.length), price = e.forSale, name = e.name;
+      sellEnterprise(s, e.id, rival, price);
+      news(`🤝 «${name}» куплено компанией ${RIVALS[rival].name} за ${price.toLocaleString('ru-RU')} ₽`);
+    }
+  }
 }
 
 // ---------- рынок товаров ----------
@@ -672,6 +780,7 @@ export function productionTick(s, { spend, earn, fx, news }) {
     gainXp(s, e, v, news);
   }
   specsTick(s, { spend, news });
+  marketTick(s, news);
   // склады города: подвоз извне и покупки остальных горожан; цена растёт при дефиците
   for (const g in s.prices) {
     const d = depotOf(g);
