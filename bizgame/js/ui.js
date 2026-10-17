@@ -7,7 +7,7 @@ import {
 import * as G from './game.js';
 import * as P from './production.js';
 import { CATS } from './ledger.js';
-import { entDef, defOf, recipesFor, sellsList, accepts, producers, GROUPS, UNLOCKS } from './catalog.js';
+import { entDef, defOf, recipesFor, sellsList, accepts, GROUPS, UNLOCKS } from './catalog.js';
 import { ic, eTile, entTile, bTile, bGlyph, unitIc, stripEmoji } from './icons.js';
 
 const $ = s => document.querySelector(s);
@@ -689,7 +689,7 @@ export class UI {
     const cr = this.cr ||= { step: 1 };
     const L = G.companyLevel(s);
     const lock = d => (d.later ? '<div class="later">Эта сфера бизнеса в игре будет открыта позднее</div>'
-      : d.minLevel && L < d.minLevel ? `<div class="req">Для постройки предприятия требуется ${d.minLevel}-й уровень компании (у вас ${L})</div>` : '');
+      : d.minLevel && L < d.minLevel ? `<div class="req">${ic('lock')} Нужен ${d.minLevel}-й уровень компании (у вас ${L})</div>` : '');
     const locked = d => d.later || (d.minLevel && L < d.minLevel);
     const icons = list => `<div class="ccicons">${list.map(g => `<span class="ge" title="${GOODS[g].name}">${GOODS[g].icon}</span>`).join('')}</div>`;
     const typeGoods = t => { const T = ENTERPRISES[t]; return [...new Set(T.subs ? Object.keys(T.subs).flatMap(sb => sellsList(t, sb).length ? sellsList(t, sb) : recipesFor(t, sb)) : (sellsList(t).length ? sellsList(t) : recipesFor(t)))]; };
@@ -698,7 +698,7 @@ export class UI {
     if (cr.step === 1) {
       h += `<div class="req2">Выберите тип предприятия</div><div class="ccards">`;
       for (const t in ENTERPRISES) {
-        const T = ENTERPRISES[t];
+        const T = defOf(t); // с подвидами — уровень самого доступного подвида
         const minCost = T.subs ? Math.min(...Object.values(T.subs).map(x => x.cost || T.cost)) : T.cost;
         h += `<button class="ccard ${locked(T) ? 'locked' : ''}" data-act="crtype" data-k="${t}" ${T.later ? 'disabled' : ''}><span class="cicon">${this.thumb('ent', t)}</span>
           <div><b>${T.name}</b><small>${T.desc}</small><i>Инвестиции: от ${fmtShort(minCost)}</i>${lock(T)}${icons(typeGoods(t).slice(0, 26))}</div></button>`;
@@ -720,7 +720,7 @@ export class UI {
     const D = defOf(cr.type, cr.sub);
     const options = recipesFor(cr.type, cr.sub);
     const hosts = D.sells ? P.shopHosts(s) : [];
-    const err = locked(D) ? 'Недостаточный уровень компании' : s.money < D.cost ? `Не хватает денег: нужно ${fmt(D.cost)}` : D.sells && !hosts.length ? 'Нет свободных коммерческих помещений' : null;
+    const err = locked(D) ? `Нужен ${D.minLevel}-й уровень компании (у вас ${L})` : s.money < D.cost ? `Не хватает денег: нужно ${fmt(D.cost)}` : D.sells && !hosts.length ? 'Нет свободных коммерческих помещений' : null;
     h += `<div class="ccard wide static"><span class="cicon">${this.thumb('ent', cr.type, cr.sub)}${cr.sub ? entTile(cr.type, cr.sub, 'sm') : ''}</span><div><b>${D.name}</b><small>${D.desc}</small>
         <div class="kv" style="max-width:520px"><span>Инвестиции</span><span>${fmt(D.cost)}</span><span>Рабочих в подразделении</span><span>${D.workers}</span>
         <span>Склад</span><span>${num(D.storage || 0)} ед.</span><span>Содержание</span><span>${fmt(D.upkeep)}/день</span></div>
@@ -1523,6 +1523,7 @@ export class UI {
   win_enterprises() { return this.co_ent(this.s); }
 
   win_market(s) {
+    const L = G.companyLevel(s);
     // недвижимость — во вкладке «Аналитика» города; вкладки рынка — в общем подменю раздела
     if (this.page === 'market' && this.winTab === 'estate') this.winTab = 'goods';
     let h = '';
@@ -1544,7 +1545,7 @@ export class UI {
         <table class="grid"><tr><th>Товар</th><th>Где делают</th><th>Из чего (на 1 ед.)</th><th class="r">Цех в день</th><th class="r">Опт. цена</th></tr>`;
       for (const r in RECIPES) {
         const R = RECIPES[r];
-        h += `<tr><td>${gn(r)}</td><td>${producers(r).join(', ')}</td><td>${Object.entries(R.inputs).map(([g, k]) => `<span title="${GOODS[g].name}">${qty(k)} ${unitOf(g)} ${GOODS[g].icon}</span>`).join(' + ') || '—'}</td>
+        h += `<tr><td>${gn(r)}</td><td>${R.by.map(k => { const [ty, sb] = k.split(':'), D = defOf(ty, sb); return D.minLevel > L ? `<span class="hint" title="Откроется с ${D.minLevel}-го уровня компании">${esc(D.name)} ${ic('lock')}${D.minLevel}</span>` : esc(D.name); }).join(', ')}</td><td>${Object.entries(R.inputs).map(([g, k]) => `<span title="${GOODS[g].name}">${qty(k)} ${unitOf(g)} ${GOODS[g].icon}</span>`).join(' + ') || '—'}</td>
           <td class="r">${qu(R.rate, r)}</td><td class="r">${fmt(GOODS[r].price)}/${unitOf(r)}</td></tr>`;
       }
       h += '</table><h3>Стройматериалы на один этаж</h3><table class="grid">';
