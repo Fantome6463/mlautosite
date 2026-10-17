@@ -401,6 +401,59 @@ export function setDivRecipe(s, e, d, recipe) {
 }
 
 // Продажа государству — за половину стоимости активов (оборудование + товары)
+// ---------- переезд и объединение ----------
+// Переезд торговой точки в другое помещение: нужна свободная площадь под все отделы; часть известности теряется
+export const relocateFee = e => Math.round(entDef(e).cost * 0.15 + entArea(e) * 1500);
+export const relocateHosts = (s, e) => Object.values(s.buildings).filter(b => b.id !== e.host && freeArea(s, b) >= entArea(e));
+export function relocate(s, e, hostId) {
+  if (!entDef(e).sells) return { error: 'Переезжают только магазины, рестораны, салоны и автосервисы' };
+  const b = s.buildings[hostId];
+  if (!b || b.id === e.host) return { error: 'Выберите другое помещение' };
+  const need = entArea(e);
+  if (freeArea(s, b) < need) return { error: `Не хватает площади: нужно ${need} м², свободно ${Math.max(0, freeArea(s, b))} м²` };
+  const fee = relocateFee(e);
+  if (s.money < fee) return { error: `Переезд стоит ${fee.toLocaleString('ru-RU')} ₽` };
+  makeRoom(s, b, need);
+  ledgerPay(s, -fee, 'equipment', { party: 'Транспортная компания', from: e.name, type: `Переезд в здание №${b.id}` });
+  e.host = b.id;
+  e.aware = Math.max(BASE_AWARE, (e.aware ?? BASE_AWARE) * 0.7); // на новом месте покупатели знают меньше
+  return { ok: true, fee };
+}
+// Объединять можно только предприятия одного вида и подвида: продуктовый с продуктовым, ювелирный завод с ювелирным
+export const sameKind = (a, b) => a.id !== b.id && a.type === b.type && (a.sub || null) === (b.sub || null);
+export const mergeCandidates = (s, e) => Object.values(s.enterprises).filter(x => sameKind(e, x));
+export const mergeFee = src => Math.round(src.invested * 0.05);
+// src вливается в dst: подразделения, склад, снабжение, уровни и опыт; освобождается место в управляющем отделе
+export function mergeEnterprises(s, dst, src) {
+  if (!dst || !src || !sameKind(dst, src)) return { error: 'Объединять можно только предприятия одного вида — например, продуктовый магазин с продуктовым' };
+  if (entDef(dst).sells && src.host !== dst.host) {
+    const b = s.buildings[dst.host], need = entArea(src);
+    if (!b || freeArea(s, b) < need) return { error: `В помещении «${dst.name}» не хватает ${need} м² под отделы «${src.name}». Сначала переезд в помещение побольше.` };
+    makeRoom(s, b, need);
+  }
+  const fee = mergeFee(src);
+  if (s.money < fee) return { error: `Объединение стоит ${fee.toLocaleString('ru-RU')} ₽` };
+  ledgerPay(s, -fee, 'equipment', { party: 'Юридическая фирма', from: dst.name, type: `Объединение с «${src.name}»` });
+  dst.divs.push(...src.divs);
+  for (const g in src.stock) { const x = src.stock[g]; addStock(dst, g, x.qty, x.q, x.c); }
+  for (const g in src.supply) if (!dst.supply[g] && src.supply[g].src !== dst.id) dst.supply[g] = { ...src.supply[g] };
+  if (dst.supply) for (const g in dst.supply) if (dst.supply[g].src === src.id) delete dst.supply[g];
+  for (const g in src.autoSell) dst.autoSell[g] ||= src.autoSell[g];
+  for (const g in src.prices) dst.prices[g] ??= src.prices[g];
+  dst.lvl = Math.min(ENT_MAX_LEVEL, Math.max(levelOf(dst), (dst.lvl || 1) + (src.lvl || 1)));
+  dst.xp = (dst.xp || 0) + (src.xp || 0);
+  while (dst.lvl < ENT_MAX_LEVEL && dst.xp >= xpNeed(dst.lvl)) { dst.xp -= xpNeed(dst.lvl); dst.lvl++; }
+  dst.invested += src.invested;
+  dst.aware = Math.max(dst.aware ?? BASE_AWARE, src.aware ?? BASE_AWARE);
+  dst.hist = dst.hist.map((h, n) => { const o = src.hist[src.hist.length - dst.hist.length + n]; return o ? { rev: h.rev + o.rev, exp: h.exp + o.exp } : h; });
+  for (const x of s.specs || []) if (x.job === src.id) x.job = specOf(s, dst) ? null : dst.id;
+  // кто получал товар от src — теперь получает от dst
+  for (const x of Object.values(s.enterprises)) for (const g in x.supply || {}) if (x.supply[g].src === src.id) x.supply[g].src = x === dst ? null : dst.id;
+  for (const g in dst.supply) if (dst.supply[g].src == null) delete dst.supply[g];
+  delete s.enterprises[src.id];
+  return { ok: true, fee };
+}
+
 export function stateBuyout(s, e) {
   let stock = 0;
   for (const g in e.stock) stock += e.stock[g].qty * s.prices[g] * 0.6;

@@ -422,9 +422,31 @@ export class UI {
     <div class="iso">${slots.map(x => x
       ? `<button class="isotile" data-act="enttab-go" data-k="divs" title="${esc(P.divName(e, x))}">${eTile(e, 'lg')}<span class="star sm">${x.level}</span>${x.recipe ? `<b class="ge">${GOODS[x.recipe].icon}</b><span class="slot">${GOODS[x.recipe].name}</span>` : ''}${x.on ? '' : '<em>выкл.</em>'}</button>`
       : `<button class="isotile empty ${P.freeLevels(e) < 1 ? 'nofree' : ''}" data-act="adddiv" title="${P.freeLevels(e) < 1 ? 'Нужен свободный уровень предприятия' : 'Новое подразделение — ' + fmt(P.divCost(e))}"><span>${ic(P.freeLevels(e) < 1 ? 'lock' : 'plus')}${P.freeLevels(e) < 1 ? 'нужен свободный уровень' : 'новое · ' + fmtShort(P.divCost(e))}</span></button>`).join('')}</div>
+    ${this.moveMergeHtml(e, s)}
     <div class="actions"><input type="text" value="${esc(e.name)}" data-act="ename" maxlength="40" style="width:240px">
       <button class="btn" data-act="gopage" data-k="exchange" data-ex="sell">${ic('handshake')} Продать на бирже (оценка ${fmt(P.entValue(s, e))})</button>
       <button class="btn danger" data-act="eclose">Продать государству (${fmt(P.stateBuyout(s, e))})</button></div>`;
+  }
+
+  // Переезд (для торговли) и объединение с предприятием того же вида
+  moveMergeHtml(e, s) {
+    const d = entDef(e), cands = P.mergeCandidates(s, e);
+    let h = '<div class="twocol">';
+    if (d.sells) {
+      const hosts = P.relocateHosts(s, e), cur = s.buildings[e.host];
+      h += `<div class="box"><h4>${ic('truck')} Переезд</h4>
+        <p class="hint">Сейчас: ${cur ? `${BUILDINGS[cur.type].name} №${cur.id}` : '—'}, отделы занимают ${P.entArea(e)} м². Нужно помещение, где свободно не меньше. Известность на новом месте упадёт на 30%.</p>
+        ${hosts.length ? `<div class="row"><select id="mvHost">${hosts.map(b => { const a = P.catchment(s, b, P.shopRadius(e), P.profileOf(e), e.id);
+          return `<option value="${b.id}">${BUILDINGS[b.type].name} №${b.id} (${b.i}:${b.j}) — свободно ${num(P.freeArea(s, b))} м², жителей ~${a.pop}, конкурентов ${a.comp}, ${b.owner === 'player' ? 'ваш, без аренды' : `аренда ${b.units.comm.rent} ₽/м²`}</option>`; }).join('')}</select>
+          <button class="btn small primary" data-act="relocate">Переехать за ${fmtShort(P.relocateFee(e))}</button></div>`
+          : '<p class="warn">Нет помещений с нужной свободной площадью. Постройте торговый центр или ЖК с галереей.</p>'}</div>`;
+    }
+    h += `<div class="box"><h4>${ic('layers')} Объединение</h4>
+      <p class="hint">Можно объединить только с предприятием того же вида (${esc(d.name.toLowerCase())}). Подразделения, склад, снабжение, уровни и опыт переходят сюда,
+        место в управляющем отделе освобождается.${d.sells ? ' Отделам второго предприятия нужна свободная площадь в этом помещении.' : ''}</p>
+      ${cands.length ? `<div class="row"><select id="mgSrc">${cands.map(x => `<option value="${x.id}">${esc(x.name)} — ур. ${x.lvl || 1}, отделов ${x.divs.length}${d.sells ? `, ${P.entArea(x)} м²` : ''}, взнос ${fmtShort(P.mergeFee(x))}</option>`).join('')}</select>
+        <button class="btn small primary" data-act="merge">Присоединить</button></div>` : `<p class="hint">Других предприятий вида «${esc(d.name)}» у вас нет.</p>`}</div>`;
+    return h + '</div>';
   }
 
   ep_prod(e, s) {
@@ -723,6 +745,22 @@ export class UI {
         this.renderPage(); break;
       }
       case 'adset': this.app.act(() => { e.ad = +t.dataset.v; }); this.renderPage(); break;
+      case 'relocate': {
+        const b = s.buildings[+$('#mvHost').value];
+        if (b && confirm(`Переехать в ${BUILDINGS[b.type].name} №${b.id} за ${fmt(P.relocateFee(e))}?`)) {
+          const r = run(() => P.relocate(s, e, b.id));
+          if (r?.ok) this.toast(`«${e.name}» переехал`);
+        }
+        this.renderPage(); break;
+      }
+      case 'merge': {
+        const src = s.enterprises[+$('#mgSrc').value];
+        if (src && confirm(`Присоединить «${src.name}» к «${e.name}»? «${src.name}» перестанет существовать как отдельное предприятие.`)) {
+          const r = run(() => P.mergeEnterprises(s, e, src));
+          if (r?.ok) this.toast(`«${src.name}» присоединён к «${e.name}»`);
+        }
+        this.renderPage(); break;
+      }
       case 'recprice':
         this.app.act(() => { for (const g of sellsList(e.type, e.sub)) if (e.stock[g] || e.prices[g] != null) e.prices[g] = P.recommendedPrice(s, g, e.stock[g]?.q); });
         this.toast('💡 Цены выставлены с учётом качества'); this.renderPage(); break;
