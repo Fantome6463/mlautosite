@@ -1,0 +1,298 @@
+#!/usr/bin/env bash
+# Маршрутник на Linux-сервере рядом с CRM «Лаборатория 3Д» - то же, что marshrutnik.bat на Windows.
+#
+#   marshrutnik                  # статус: подключён ли, DNS, отвечает ли сайт, версия
+#   sudo marshrutnik connect     # подключить сайт к Caddy CRM (или переподключить)
+#   sudo marshrutnik update      # обновить сайт из GitHub (перезапуск не нужен)
+#   sudo marshrutnik disconnect  # отключить сайт
+#   sudo marshrutnik domain D    # другой домен (по умолчанию маршрутник.рф), затем connect
+#   sudo marshrutnik port N      # порт просмотра по IP (по умолчанию 8088, 0 - выключить)
+#
+# Сайт статический, своего процесса у него нет: его раздаёт тот же Caddy, что и CRM.
+# Мы кладём только свой файл /etc/caddy/lab3d.d/marshrutnik.caddy - основной Caddyfile
+# пишет «lab3d config», и он уже подключает все файлы из этой папки.
+#
+# connect ставит копию этого файла в /usr/local/sbin/marshrutnik (владелец root, путь к сайту
+# вписан) - как lab3d: root не должен исполнять файл, который может поменять владелец папки сайта.
+set -euo pipefail
+
+ROOT="@MARSHRUTNIK_ROOT@"
+# Запуск прямо из репозитория: сайт - на две папки выше. Метка в проверке записана шаблоном,
+# иначе установка заменила бы и её (см. тот же приём в lab3d).
+[[ $ROOT == @*@ ]] && ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)
+[[ -f $ROOT/index.html && -f $ROOT/app.js ]] || { echo "marshrutnik: не найден сайт в $ROOT" >&2; exit 1; }
+
+CONF=/etc/marshrutnik.conf
+CADDY_FILE=/etc/caddy/Caddyfile
+CADDY_EXTRA_D=/etc/caddy/lab3d.d
+SITE_FILE=$CADDY_EXTRA_D/marshrutnik.caddy
+INSTALLED_CLI=/usr/local/sbin/marshrutnik
+DEFAULT_DOMAIN="маршрутник.рф"
+DEFAULT_PORT=8088
+
+# ---------------------------------------------------------------- вывод
+
+if [[ -t 1 ]]; then C_STEP=$'\e[36m' C_OK=$'\e[32m' C_WARN=$'\e[33m' C_BAD=$'\e[31m' C_END=$'\e[0m'
+else C_STEP="" C_OK="" C_WARN="" C_BAD="" C_END=""; fi
+step() { printf '%s==> %s%s\n' "$C_STEP" "$*" "$C_END"; }
+ok() { printf '%s    %s%s\n' "$C_OK" "$*" "$C_END"; }
+warn() { printf '%s    ! %s%s\n' "$C_WARN" "$*" "$C_END"; }
+bad() { printf '%s    × %s%s\n' "$C_BAD" "$*" "$C_END" >&2; }
+die() { bad "$*"; exit 1; }
+line() { # LABEL GOOD(0/1) TEXT
+  local color=$C_WARN; [[ $2 == 1 ]] && color=$C_OK
+  # Отступ считаем по символам: printf %-12s считает байты, и кириллица разъезжается.
+  printf '  %s%*s %s%s%s\n' "$1" $((12 - ${#1})) "" "$color" "$3" "$C_END"
+}
+
+need_root() { [[ $EUID -eq 0 ]] || die "Нужны права root: sudo $(basename "$0") $*"; }
+
+# ---------------------------------------------------------------- настройки (/etc/marshrutnik.conf)
+# Читаем построчно, не через source: файл - данные, а не код.
+
+conf_get() { # KEY DEFAULT
+  local v=""
+  [[ -f $CONF ]] && v=$(grep -m1 "^$1=" "$CONF" | cut -d= -f2- | sed 's/^"//; s/"$//') || true
+  echo "${v:-$2}"
+}
+conf_set() { # KEY VALUE
+  local tmp; tmp=$(mktemp)
+  [[ -f $CONF ]] && grep -v "^$1=" "$CONF" > "$tmp" || true
+  echo "$1=\"$2\"" >> "$tmp"
+  install -m 644 -o root -g root "$tmp" "$CONF"; rm -f "$tmp"
+}
+domain() { conf_get DOMAIN "$DEFAULT_DOMAIN"; }
+preview_port() { conf_get PREVIEW_PORT "$DEFAULT_PORT"; }
+
+# маршрутник.рф -> xn--80aqgfgraqi2c.xn--p1ai (так домен понимают DNS, Caddy и сертификаты)
+ascii_domain() {
+  local d; d=$(tr '[:upper:]' '[:lower:]' <<<"$1")
+  if [[ $d =~ ^[a-z0-9.-]+$ ]]; then echo "$d"; return; fi
+  if command -v python3 >/dev/null; then python3 -c 'import sys; print(sys.argv[1].encode("idna").decode())' "$d"; return; fi
+  if command -v idn2 >/dev/null; then idn2 "$d"; return; fi
+  [[ $d == "$DEFAULT_DOMAIN" ]] && { echo "xn--80aqgfgraqi2c.xn--p1ai"; return; }
+  die "Не могу перевести $d в punycode: нужен python3 или idn2 (apt install idn2)."
+}
+
+# ---------------------------------------------------------------- проверки
+
+local_ip() { hostname -I 2>/dev/null | awk '{print $1}'; }
+public_ip() { curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true; }
+a_record() { getent ahostsv4 "$1" 2>/dev/null | awk 'NR==1 {print $1}'; }
+caddy_running() { systemctl is-active -q caddy 2>/dev/null; }
+connected() { [[ -f $SITE_FILE ]]; }
+
+# Кто слушает порт: пусто - свободен, иначе имя программы.
+port_owner() {
+  ss -Hltnp "sport = :$1" 2>/dev/null | grep -o 'users:(("[^"]*' | head -n1 | cut -d'"' -f2 ||
+    true
+}
+
+# Порт для просмотра по IP: сохранённый, если свободен (или уже наш), иначе следующий свободный.
+pick_preview_port() {
+  local port p owner; port=$(preview_port)
+  (( port > 0 )) || { echo 0; return; }
+  for ((p = port; p < port + 20; p++)); do
+    owner=$(port_owner "$p")
+    if [[ -z $owner || $owner == caddy ]]; then
+      (( p == port )) || conf_set PREVIEW_PORT "$p"
+      echo "$p"; return
+    fi
+  done
+  echo 0
+}
+
+# Caddy работает от пользователя caddy - он должен видеть файлы сайта.
+check_caddy_can_read() {
+  id caddy >/dev/null 2>&1 || return 0
+  runuser -u caddy -- test -r "$ROOT/index.html" ||
+    die "Пользователь caddy не может прочитать $ROOT (папка внутри закрытой домашней?).
+      Склонируйте сайт в /opt/marshrutnik и запустите connect оттуда."
+}
+
+# ---------------------------------------------------------------- конфиг Caddy
+
+site_text() { # DOMAIN ASCII WITH_WWW PREVIEW_PORT
+  cat <<EOF
+# Маршрутник ($1) - создано «marshrutnik connect». Правки вручную перезапишутся.
+(marshrutnik_files) {
+	root * "$ROOT"
+	encode zstd gzip
+	@private path /.git* /.git/* /deploy/* /*.bat /*.exe /*.md
+	respond @private 404
+	header {
+		Cache-Control "no-cache"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	file_server
+}
+
+$2 {
+	import marshrutnik_files
+	header Strict-Transport-Security "max-age=31536000"
+}
+EOF
+  if [[ $3 == 1 ]]; then
+    printf '\nwww.%s {\n\tredir https://%s{uri} permanent\n}\n' "$2" "$2"
+  fi
+  if (( $4 > 0 )); then
+    printf '\n# просмотр по IP, пока домен не заработал\nhttp://:%s {\n\timport marshrutnik_files\n}\n' "$4"
+  fi
+}
+
+# Caddyfile от «lab3d config» уже подключает lab3d.d. Если Caddy ставили иначе - добавим строку сами.
+ensure_import() {
+  [[ -f $CADDY_FILE ]] || die "Нет $CADDY_FILE - Caddy не установлен. Сначала установите CRM (deploy/linux/install.sh)."
+  if ! grep -qF "import $CADDY_EXTRA_D/*.caddy" "$CADDY_FILE"; then
+    cp "$CADDY_FILE" "$CADDY_FILE.marshrutnik-bak"
+    printf '\nimport %s/*.caddy\n' "$CADDY_EXTRA_D" >> "$CADDY_FILE"
+    warn "В $CADDY_FILE добавлена строка import $CADDY_EXTRA_D/*.caddy (копия: $CADDY_FILE.marshrutnik-bak)"
+  fi
+  if grep -q "local_certs" "$CADDY_FILE"; then
+    warn "CRM настроена без домена (local_certs): Caddy выдаст сайту свой сертификат, браузер предупредит."
+    warn "Как только у CRM будет домен (sudo lab3d config), сертификат станет настоящим."
+  fi
+}
+
+reload_caddy() {
+  if caddy_running; then
+    if systemctl reload caddy 2>/dev/null; then
+      ok "Caddy подхватил сайт без перезапуска. Сертификат HTTPS он получит сам за 1-2 минуты."
+    else
+      warn "Не удалось перезагрузить Caddy - подробнее: journalctl -u caddy -n 50"
+      return 1
+    fi
+  else
+    warn "Caddy сейчас не запущен - сайт заработает вместе с CRM (sudo lab3d start caddy)."
+  fi
+}
+
+ufw_active() { command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; }
+
+install_cli() {
+  local tmp; tmp=$(mktemp)
+  sed "s#@MARSHRUTNIK_ROOT@#$ROOT#" "$ROOT/deploy/linux/marshrutnik" > "$tmp"
+  install -m 755 -o root -g root "$tmp" "$INSTALLED_CLI"; rm -f "$tmp"
+}
+
+# ---------------------------------------------------------------- команды
+
+cmd_connect() {
+  need_root connect
+  local d a www=0 port previous="" out
+  d=$(domain); a=$(ascii_domain "$d")
+  step "Подключение $d"
+  command -v caddy >/dev/null || die "Caddy не установлен. Сначала установите CRM (deploy/linux/install.sh)."
+  check_caddy_can_read
+  ensure_import
+  install -d -m 755 "$CADDY_EXTRA_D"
+
+  [[ -n $(a_record "www.$a") ]] && www=1
+  (( www )) || warn "www.$d в DNS пока нет - подключаю без www (добавится при следующем connect)."
+
+  [[ -f $SITE_FILE ]] && previous=$(cat "$SITE_FILE")
+  port=$(pick_preview_port)
+  site_text "$d" "$a" "$www" "$port" > "$SITE_FILE"
+  chmod 644 "$SITE_FILE"
+
+  # Кривой конфиг не оставляем: откатываем.
+  if ! out=$(caddy validate --config "$CADDY_FILE" --adapter caddyfile 2>&1); then
+    if [[ -n $previous ]]; then printf '%s\n' "$previous" > "$SITE_FILE"; else rm -f "$SITE_FILE"; fi
+    grep -iE "error|fail" <<<"$out" | tail -n 3 | sed 's/^/      /' >&2
+    die "Caddy не принял настройки, изменения отменены."
+  fi
+  ok "Файл сайта: $SITE_FILE"
+  reload_caddy || true
+
+  if (( port > 0 )); then
+    if ufw_active; then ufw allow "$port/tcp" comment marshrutnik >/dev/null && ok "ufw: порт $port открыт."; fi
+    ok "Просмотр по IP (без домена): http://$(local_ip):$port"
+  fi
+  if ufw_active; then ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; fi
+
+  install_cli
+  ok "Команда: marshrutnik (статус), sudo marshrutnik update / disconnect"
+}
+
+cmd_disconnect() {
+  need_root disconnect
+  connected || { warn "Сайт и так не подключён."; return; }
+  rm -f "$SITE_FILE"
+  if ufw_active; then ufw delete allow "$(preview_port)/tcp" >/dev/null 2>&1 || true; fi
+  ok "Сайт отключён от Caddy."
+  caddy_running && systemctl reload caddy 2>/dev/null || true
+}
+
+# git - от имени владельца папки, чтобы root не оставлял в ней своих файлов.
+as_owner() {
+  local owner; owner=$(stat -c %U "$ROOT")
+  if [[ $EUID -eq 0 && $owner != root ]]; then runuser -u "$owner" -- "$@"; else "$@"; fi
+}
+git_site() { as_owner env GIT_TERMINAL_PROMPT=0 git -c core.quotepath=off -c safe.directory="$ROOT" -C "$ROOT" "$@"; }
+
+cmd_update() {
+  step "Обновление сайта"
+  [[ -d $ROOT/.git ]] || die "Папка сайта не из git. Скачайте её заново через git clone - тогда обновление будет одной командой."
+  command -v git >/dev/null || die "git не установлен (apt install git)."
+  git_site pull --ff-only | sed 's/^/    /' ||
+    die "git pull не удался. Если в папке сайта что-то правили вручную - верните как было (git checkout .) и повторите."
+  # Новая версия скрипта управления - тоже на место.
+  [[ $EUID -eq 0 && -f $INSTALLED_CLI ]] && install_cli
+  ok "Готово. Новая версия уже на сайте - перезапускать ничего не нужно."
+}
+
+cmd_status() {
+  local d a dns pub port online=0 prev_online=0
+  d=$(domain); a=$(ascii_domain "$d")
+  step "Маршрутник - $d"
+  curl -fsS -o /dev/null --max-time 8 "https://$a/" 2>/dev/null && online=1
+  line "Сайт" "$online" "$( ((online)) && echo "https://$d отвечает" || echo "по домену не отвечает")"
+
+  port=$(preview_port)
+  if connected && (( port > 0 )) && grep -qF "http://:$port" "$SITE_FILE"; then
+    curl -fsS -o /dev/null --max-time 5 "http://127.0.0.1:$port/" 2>/dev/null && prev_online=1
+    line "По IP" "$prev_online" "http://$(local_ip):$port $( ((prev_online)) && echo открывается || echo "не отвечает")"
+  else
+    line "По IP" 0 "после sudo marshrutnik connect"
+  fi
+  line "Папка" 1 "$ROOT"
+  connected && line "Подключён" 1 "да ($SITE_FILE)" || line "Подключён" 0 "нет - sudo marshrutnik connect"
+  caddy_running && line "Caddy" 1 "запущен" || line "Caddy" 0 "не запущен"
+
+  dns=$(a_record "$a"); pub=$(public_ip)
+  if [[ -z $dns ]]; then line "DNS" 0 "записи A пока нет (нужна: $d -> ${pub:-внешний IP})"
+  elif [[ -n $pub && $dns != "$pub" ]]; then line "DNS" 0 "$dns, а внешний IP сервера $pub"
+  else line "DNS" 1 "$dns"; fi
+
+  if [[ -d $ROOT/.git ]] && command -v git >/dev/null; then
+    local head behind
+    head=$(git_site log -1 --format='%h от %cd' --date=format:'%d.%m.%Y %H:%M' 2>/dev/null || true)
+    git_site fetch --quiet 2>/dev/null || true
+    behind=$(git_site rev-list --count 'HEAD..@{u}' 2>/dev/null || echo "?")
+    line "Версия" "$([[ $behind == 0 ]] && echo 1 || echo 0)" "$head, обновлений: $behind"
+  fi
+}
+
+case ${1:-status} in
+  status) cmd_status ;;
+  connect) cmd_connect ;;
+  update) cmd_update ;;
+  disconnect) cmd_disconnect ;;
+  domain)
+    need_root domain
+    [[ -n ${2:-} ]] || die "Укажите домен: sudo marshrutnik domain маршрутник.рф"
+    d=${2#https://}; d=${d#http://}; d=${d%/}
+    ascii_domain "$d" >/dev/null
+    conf_set DOMAIN "$d"; ok "Домен: $d"
+    connected && cmd_connect || ok "Теперь: sudo marshrutnik connect" ;;
+  port)
+    need_root port
+    [[ ${2:-} =~ ^[0-9]+$ ]] || die "Укажите порт: sudo marshrutnik port 8088 (0 - выключить просмотр по IP)"
+    if ufw_active && connected; then ufw delete allow "$(preview_port)/tcp" >/dev/null 2>&1 || true; fi
+    conf_set PREVIEW_PORT "$2"; ok "Порт просмотра по IP: $2"
+    connected && cmd_connect || ok "Теперь: sudo marshrutnik connect" ;;
+  -h|--help|help) sed -n '2,13p' "$(readlink -f "${BASH_SOURCE[0]}")" | sed 's/^# \{0,1\}//' ;;
+  *) die "Неизвестная команда '$1'. Есть: status, connect, update, disconnect, domain, port (help)." ;;
+esac
